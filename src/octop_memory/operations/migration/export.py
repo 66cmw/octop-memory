@@ -157,7 +157,7 @@ def _iter_active_entities(memory: Memory) -> Iterator[Any]:
                     ORDER BY thread_id, last_seen_at DESC"""
             ).fetchall()
     elif _is_postgres_backend(backend):
-        with backend._conn.cursor() as cur:
+        with backend._cursor() as cur:
             cur.execute(
                 """SELECT thread_id, entity_id, last_seen_at, source
                    FROM thread_active_entities

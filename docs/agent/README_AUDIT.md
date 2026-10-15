@@ -11,7 +11,7 @@
 | 事实与树 | AtomCard 是事实真源，leaf 是引用；`core.py`、`storage/backends/` |
 | 搜索范围 | Memory.recall 为 leaf 投影，Memory.search 为归档消息，prompt recall 为多源；`core.py`、`pipeline/recall/` |
 | 召回策略 | 默认 atom/raw；entity anchor 加 page_headline、index 加 vector；raw fallback 与 session 排除；`router.py`、`multi_source.py`、recall 入口 |
-| backend | SQLite/PostgreSQL 是关系 backend；Chroma/Qdrant 是 index，不宣称 PostgreSQL skip 等于通过 |
+| backend | SQLite/PostgreSQL 是关系 backend；PG 共享 8+4 连接预算、30 秒等待及 64 请求队列，注明进程/配置边界；Chroma/Qdrant 是 index，不宣称 PG skip 等于通过 |
 | capture / page | 不承诺每条消息都捕获，dirty 不等于已再生成；`application/runtime.py`、`pipeline/page/` |
 | 宿主接入 | OpenClaw/Hermes 共享一份指南；真实 host hook、安装环境与纯 Python 单测分开验证 |
 | 数据维护 | 不将去重、retention、vacuum 混为一谈；明确备份、offline 声明与旧 reader 兼容性 |

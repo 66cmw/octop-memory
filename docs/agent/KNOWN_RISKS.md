@@ -2,7 +2,7 @@
 
 只记录仍影响维护的风险：触发条件、影响、应对与验证。修复后删除失效描述或保留简短 Resolved 条目和对应 PR。
 
-- PG fixtures 在服务不可用时 skip，当前 CI/release workflow 未配置专用 PG service；不能仅凭基础 CI 证明兼容。
+- PG 共享池预算仅覆盖同一进程、同一连接配置；多进程、不同配置和宿主控制面要额外预留服务端连接。长事务会占用业务池，饱和时有界等待后报错，不会无限扩容。CI/release 已使用专用 PG；本地未配置测试服务的 skip 仍不算 PG 验收。
 - `run_gc()` retention 当前仅 SQLite 实现，PG 返回空统计，是待修复的既有能力缺口。
   删除行、checkpoint retention 和物理空间回收是不同操作；不能据此推断宿主已自动调度。
 - PostgreSQL 的 `btree_gin` 不可用时退回普通 GIN，namespace 过滤正确性保留，性能隔离减弱。

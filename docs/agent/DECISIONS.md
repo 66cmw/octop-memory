@@ -119,7 +119,7 @@ prompt recall 在 rerank 前执行 `raw_policy=fallback`，有提炼结果时不
 pending 走自动检查；conflict/needs_review 由 approve 处理，duplicate 合并，矛盾 active atom 被 successor 替代。
 写入、candidate 状态、supersede、user journal 在同一事务内；代价是明确覆盖自动判断，不能把它当普通重试。
 
-## ADR-032：PostgreSQL 在 cursor 边界恢复连接（Accepted）
+## ADR-032：PostgreSQL 在 cursor 边界恢复连接（Superseded by ADR-040）
 
 transaction 外才允许 reset/reconnect 并恢复 search_path；显式 transaction 内失败即失败。
 避免静默提交半套写入；代价是调用方需重试整个事务。既有 SQLite-only GC 缺口不代表允许静默能力分叉。
@@ -169,7 +169,29 @@ SQLite checkpoint 编码、`hm_*` 表和 `.hmpkg` 格式属于持久化协议，
 显式事务与关闭也持同一锁；非显式事务中的失败写入回滚后再抛出原错误。
 vacuum、WAL truncate 和 export 的内部 SQL 同样受保护，避免维护与正常写入串入同一事务。
 
-选择单连接而非引入连接池，沿用 PostgreSQL 已有的操作串行模式，减少空闲 fd 和生命周期分支。
+选择单连接而非引入 SQLite 连接池，减少空闲 fd 和生命周期分支。PostgreSQL 的共享池见 ADR-040。
 代价是慢查询和长显式事务会阻塞同 backend 的其他 SQL；LLM 调用不在这些操作锁内，
 不同 backend 以及单独的 checkpoint 连接仍可并行。保留 SQLite/WAL、表、事务原子性与召回契约，
 无需数据迁移。后续若要增加同 backend SQL 并行，必须使用有界连接租约并重新验证事务与关闭行为。
+
+
+## ADR-040：PostgreSQL 按连接配置共享有界池（Accepted）
+
+每 agent 一条业务连接加独立 checkpoint 池仍会叠加容量：69 个活跃实例至少需要 138 条会话，
+10 分钟空闲释放无法覆盖活跃峰值。改为按进程、规范化 DSN 与驱动选项共享 8 条业务连接和 4 条
+checkpoint/维护连接；namespace 留在 SQL 条件中，不参与池标识。不同会话设置使用独立池，避免串用身份或配置。
+
+业务借用连接覆盖完整 cursor/结果读取/事务，显式事务跨调用保留同一连接和 backend 可重入锁。
+池在 checkout 探测坏连接，归还时提交或回滚，事务中断不重拨后续写。连接的 search_path 由池配置回调恢复。
+原 backend 私有常驻 `_conn`、逐实例空闲 Timer 和重连冷却由 psycopg_pool 的回收、探测及重连退避替代。
+`postgres` extra 显式声明已经用于 checkpoint 的 psycopg-pool，避免另写一套业务池。
+
+LangGraph 按类型要求 ConnectionPool；内部租约适配器继承该类型但不开启自身池，仅将 `connection()`
+委托给共享池，且让 saver.conn 与 Memory._checkpointer_pool 指向同一个幂等租约，兼容宿主两次 close。
+每租约只释放一次引用，关闭等待其在途操作，最后引用关闭真实池。checkpoint setup 按池串行一次，
+失败不发布 saver/租约且立即回收；autovacuum 设置与维护操作也借用池内连接。
+
+每池最多 64 个等待者、30 秒 checkout 超时，`min_size=0`、`max_idle=600`。容量不足必须报错，
+不无限开连接或重放可能已提交的写入。此预算是进程内边界；多进程、不同连接配置及宿主控制面仍需各自计入服务端容量。
+无 schema、持久化编码、召回排序或 namespace 契约变更。真实 PG 回归覆盖 69 agent、事务/隔离、
+饱和与恢复、空闲/坏连接、初始化失败及关闭引用；SQLite 保持同组公共行为断言。

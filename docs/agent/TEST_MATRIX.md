@@ -10,7 +10,7 @@
 | 召回 | `uv run pytest tests/test_recall_pipeline.py tests/test_recall_multi_source.py tests/test_recall_risk_fixes.py -q` |
 | 提炼 | `uv run pytest tests/test_extractor.py tests/test_promotion.py -q` |
 | 写入 / backend | `uv run pytest tests/test_memory_atom_write.py tests/test_backend_parity.py -q -rs` |
-| 连接 / 事务 / fd | `uv run pytest tests/test_sqlite.py tests/test_fd_pressure.py tests/test_backend_parity.py -q -rs`；设置专用 `TEST_POSTGRES_DSN`，确认 PG 用例实际运行 |
+| 连接 / 事务 / fd | `uv run pytest tests/test_sqlite.py tests/test_fd_pressure.py tests/test_postgres_pool.py tests/test_backend_parity.py -q -rs`；设置专用 `TEST_POSTGRES_DSN`，确认 PG 用例实际运行 |
 | 向量接口 / 可选 index | `uv run pytest tests/test_vector_chroma.py -q`；使用 mock index 和 `tmp_path` 数据库，不访问默认数据目录 |
 | Checkpoint | `uv run pytest tests/test_checkpoint_compaction.py tests/test_checkpoint_gc_safety.py -q` |
 | 迁移 | `uv run pytest tests/test_migration_export_import.py tests/test_portable_e2e.py tests/test_portable_sources.py -q` |
@@ -28,7 +28,12 @@ TEST_POSTGRES_DSN='postgresql://user:pass@localhost/octop_memory_test' \
     tests/test_memory_atom_write.py tests/test_checkpointer.py -q -rs
 ```
 
-PG skip 不算通过。backend-specific 能力必须显式拒绝另一 backend 并记录限制。
+PG skip 不算通过。CI/release 启动专用 PostgreSQL 16，`TEST_POSTGRES_DSN` 已设置但连接失败时直接失败；
+本地未设置时先快速探测，服务不可用才 skip，防止连接池重试让整套测试逐项等待 30 秒。
+`test_postgres_pool.py` 验证 69 个实例混合读写和 checkpoint 的总连接数 ≤12，覆盖池满超时/排队上限、
+空闲归零与重连、服务端断开空闲连接、初始化失败重试、维护共用预算以及关闭不影响其它实例。
+空闲测试只缩短测试进程内的回收周期；生产保留 `max_idle=600`。
+backend-specific 能力必须显式拒绝另一 backend 并记录限制。
 测试使用 `tmp_path`，不能写用户真实记忆库；可选依赖和宿主 E2E 的 skip 单独报告。
 `test_fd_pressure.py` 在独立 POSIX 子进程中将 soft NOFILE 设为 1024，验证 69 个临时 Memory
 被 8 个常驻 worker 使用时仍可创建 socket，关闭后 fd 回到基线；不修改 pytest 主进程限额。

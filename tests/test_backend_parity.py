@@ -156,18 +156,15 @@ def backend(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Any]:
         be.close()
         return
 
-    psycopg = pytest.importorskip("psycopg", reason="psycopg not installed")
+    request.getfixturevalue("postgres_dsn")
     from octop_memory.storage.backends.postgres import PostgresMemoryBackend
 
     ns = f"parity_{uuid.uuid4().hex[:12]}"
-    try:
-        be = PostgresMemoryBackend(namespace=ns, dsn=PG_DSN)
-    except psycopg.OperationalError:
-        pytest.skip("PostgreSQL not available")
+    be = PostgresMemoryBackend(namespace=ns, dsn=PG_DSN)
     try:
         yield be
     finally:
-        if not be._conn.closed:
+        if not be._closed:
             be.purge_namespace()
         be.close()
 
@@ -186,7 +183,8 @@ def _expect_duplicate(backend: Any) -> type[BaseException]:
 def _recover(backend: Any) -> None:
     """Postgres aborts the whole transaction on error; SQLite does not."""
     if not isinstance(backend, SqliteMemoryBackend):
-        backend._conn.rollback()
+        # Operation/transaction contexts now return a clean connection.
+        assert backend._conn is None
 
 
 # ---------------------------------------------------------------------------
