@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 修复
+
+- SQLite 每个 backend 复用一条连接，完整 SQL 操作与显式事务串行执行，避免多 agent 与常驻 worker 的连接数相乘；关闭等待正在进行的操作，独立失败写入回滚后再抛出异常（TencentCloud/Octop#2060）。
+
 ## [1.0.1] - 2026-10-09
 
 ### 修复

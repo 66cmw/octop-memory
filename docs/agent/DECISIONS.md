@@ -161,3 +161,15 @@ SQLite checkpoint 编码、`hm_*` 表和 `.hmpkg` 格式属于持久化协议，
 查询、文件和超时失败使用 `storage/driver_errors.py` 的 `DRIVER_ERRORS`（`sqlite3.Error`、已安装时的 `psycopg.Error`、`OSError`、`TimeoutError`、`RuntimeError`），记 warning 后降级。向量索引使用 `VECTOR_ERRORS`。doctor、抽取入口、bridge、idle maintenance、backfill 与 host 轮询使用 `REPORTABLE_ERRORS`。
 事务回滚和 checkpoint 备份删除用 `try` / `finally`，失败和取消都会回滚。
 这些元组之外的异常向上抛。`AssertionError` 不在降级集合里。
+
+## ADR-039：SQLite 每 backend 一条连接，按操作与事务串行（Accepted）
+
+为避免多 agent 与常驻 worker 的连接数相乘，移除线程本地 SQLite 连接注册表。
+每 backend 使用一条 `check_same_thread=False` 连接和可重入锁，锁覆盖完整 execute/fetch/commit，
+显式事务与关闭也持同一锁；非显式事务中的失败写入回滚后再抛出原错误。
+vacuum、WAL truncate 和 export 的内部 SQL 同样受保护，避免维护与正常写入串入同一事务。
+
+选择单连接而非引入连接池，沿用 PostgreSQL 已有的操作串行模式，减少空闲 fd 和生命周期分支。
+代价是慢查询和长显式事务会阻塞同 backend 的其他 SQL；LLM 调用不在这些操作锁内，
+不同 backend 以及单独的 checkpoint 连接仍可并行。保留 SQLite/WAL、表、事务原子性与召回契约，
+无需数据迁移。后续若要增加同 backend SQL 并行，必须使用有界连接租约并重新验证事务与关闭行为。

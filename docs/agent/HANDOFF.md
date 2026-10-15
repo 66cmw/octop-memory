@@ -16,6 +16,15 @@
 
 ## 当前任务
 
+### Octop #2060：多 agent 文件描述符耗尽
+
+- **状态 / 链接**：实现与本仓验证完成，待审阅及发布；[Octop#2060](https://github.com/TencentCloud/Octop/issues/2060)。
+- **问题与场景**：SQLite 按线程缓存连接，常驻 worker 接触多个 agent 后保留“线程 × agent”条连接；69 个 Memory、软限制 1024 可耗尽 fd。旧实现的 `close()` 还可能关闭其他线程正在使用的事务连接。
+- **范围与验收**：每个 SQLite backend 一条连接；完整 SQL 操作与显式事务受同一可重入锁保护，关闭等待操作结束且不重开。69 个实例、8 个工作线程在 1024 限制下仍可读库和创建 socket，关闭后 fd 回到基线。checkpoint 仍单独连接，schema、召回 source/排序和 public API 不变。
+- **方案与关键文件**：`storage/backends/sqlite.py` 的操作锁和失败回滚；vacuum、WAL truncate、export 的内部直接 SQL 同样持锁。PostgreSQL 已使用单连接与可重入锁，本次通过同组事务行为断言验证；取舍见 ADR-039。
+- **验证**：改动前常驻 12 worker 打开 13 条连接、关闭会打断事务的回归均失败。定向 SQLite/PostgreSQL、公共写入、checkpoint 和维护测试 294 passed / 1 skipped。使用专用 `TEST_POSTGRES_DSN` 执行 `make all RUN='uv run --offline --no-sync'`，format、lint、strict mypy 均通过，pytest 为 1432 passed / 4 skipped；真实 PG 用例均运行，跳过项为 Linux `/proc`、两项 Hermes checkout E2E 和 dashboard extra。文档/架构检查 41 passed，Hermes 两项仍因缺 checkout 跳过。Octop 最新 develop 加载本次 memory 源码联调 191 passed / 1 skipped。69 个真实 MemoryRuntime 在 soft NOFILE=1024 下，4/8 个 worker 反复访问及重建 30 次均维持 348 fd，全部关闭回到基线 3。
+- **接续**：无数据迁移。慢查询或长显式事务会阻塞同 backend 的其他 SQL；不同 agent 与独立 checkpoint 连接仍可并行。发布后宿主需更新 memory 依赖才能获得连接修复。
+
 ### Octop 命名收尾
 
 - **状态**：命名清理完成；真实 PostgreSQL、Hermes checkout 和 dashboard 可选环境未验。

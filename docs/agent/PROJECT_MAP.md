@@ -41,6 +41,14 @@ portable 的 Agent 默认发现目录为 `~/.octop/agents/*/memory.sqlite` 与 `
 pipeline/storage/domain 不依赖 adapters，storage 不依赖 pipeline，service 不依赖 bridge。
 `tests/test_architecture_boundaries.py` 固化这些约束；SQL 留在 storage 内。
 
+### 连接与并发
+
+SQLite 每个 backend 保留一条连接，完整 SQL 操作、结果读取和显式事务共用一把可重入锁；
+不再按线程缓存连接。单次失败写入在非显式事务中回滚，`close()` 等待操作结束后关闭且不重开。
+内部 vacuum、WAL truncate 与 export 的直接 SQL 也遵守此锁。不同 backend 的锁互不影响，
+LangGraph checkpoint 使用单独连接，不与业务 SQL 共用事务。PostgreSQL 原有单连接、操作锁、
+idle release/reconnect 行为保留；取舍见 ADR-039。
+
 ### 数据与写入
 
 | 数据 | 用途 |

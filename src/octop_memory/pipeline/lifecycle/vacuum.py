@@ -58,6 +58,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from octop_memory.storage.backends.sqlite import locked_sqlite_operation
+
 if TYPE_CHECKING:
     from octop_memory.core import Memory
     from octop_memory.storage.backends.postgres import PostgresMemoryBackend
@@ -304,6 +306,7 @@ def check_storage(memory: Memory) -> StorageCheck:
 # ---------------------------------------------------------------------------
 
 
+@locked_sqlite_operation
 def _sqlite_nudge_vacuum(backend: SqliteMemoryBackend, *, pages: int, dry_run: bool) -> VacuumStats:
     conn = backend._conn
     auto_vacuum_mode = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
@@ -311,12 +314,12 @@ def _sqlite_nudge_vacuum(backend: SqliteMemoryBackend, *, pages: int, dry_run: b
     freelist_before = conn.execute("PRAGMA freelist_count").fetchone()[0]
 
     if not dry_run and conn.in_transaction:
-        # This thread already has an open write transaction on its own
-        # connection (``SqliteMemoryBackend.transaction()``). Reclaiming
+        # This backend already has an open write transaction owned by this
+        # thread (``SqliteMemoryBackend.transaction()``). Reclaiming
         # now would enlist vacuum in *that* transaction: a later rollback
         # undoes the reclaim, so we would report pages we did not free.
         # Skip — the idle timer retries on the next tick. Other threads
-        # have their own connections and are unaffected.
+        # wait for the backend's transaction lock before reaching here.
         return VacuumStats(
             backend="sqlite",
             dry_run=False,
@@ -419,6 +422,7 @@ def _sqlite_store_bytes(db_path: Path) -> int:
     return total
 
 
+@locked_sqlite_operation
 def _sqlite_compact_vacuum(backend: SqliteMemoryBackend, *, dry_run: bool) -> CompactStats:
     conn = backend._conn
     db_path = backend._db_path
@@ -468,6 +472,7 @@ def _sqlite_compact_vacuum(backend: SqliteMemoryBackend, *, dry_run: bool) -> Co
     )
 
 
+@locked_sqlite_operation
 def _sqlite_check(backend: SqliteMemoryBackend) -> StorageCheck:
     conn = backend._conn
     db_path = backend._db_path
