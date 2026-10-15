@@ -24,7 +24,7 @@ CLI → application / operations ───────────────�
 | `core.py` | `Memory` API、backend factory、可选 LangGraph saver |
 | `service.py`、`application/runtime.py` | typed host API 和共享 capture/search/get/extract/promote 编排 |
 | `application/config.py`、`host_files.py`、`path_projection.py` | policy、host Markdown 索引和 virtual path |
-| `storage/backends/__init__.py`、`sqlite.py`、`postgres.py`、`storage/driver_errors.py` | `MemoryBackend` contract、SQL、FTS、事务、namespace；降级捕获的异常元组 |
+| `storage/backends/__init__.py`、`sqlite.py`、`postgres.py`、`postgres_pool.py`、`storage/driver_errors.py` | `MemoryBackend` contract、SQL、FTS、事务、namespace；降级捕获的异常元组 |
 | `storage/vector/`、`ports/llm/` | 可选向量索引、embeddings 和 `LLMClient` |
 | `pipeline/` | extractor、promotion、page、episode、recall、lifecycle |
 | `adapters/` | JSON-RPC bridge、Click CLI、源码 dashboard |
@@ -40,6 +40,18 @@ portable 的 Agent 默认发现目录为 `~/.octop/agents/*/memory.sqlite` 与 `
 根目录 `.editorconfig` 固定 4 空格、LF、UTF-8，Python 行宽 120，与 `ruff` 一致。
 pipeline/storage/domain 不依赖 adapters，storage 不依赖 pipeline，service 不依赖 bridge。
 `tests/test_architecture_boundaries.py` 固化这些约束；SQL 留在 storage 内。
+
+### 连接与并发
+
+SQLite 每个 backend 保留一条连接，完整 SQL 操作、结果读取和显式事务共用一把可重入锁；
+不再按线程缓存连接。单次失败写入在非显式事务中回滚，`close()` 等待操作结束后关闭且不重开。
+内部 vacuum、WAL truncate 与 export 的直接 SQL 也遵守此锁。不同 backend 的锁互不影响，
+LangGraph checkpoint 使用单独连接，不与业务 SQL 共用事务；SQLite 取舍见 ADR-039。
+PostgreSQL 的 `postgres_pool.py` 按进程、规范化 DSN 与驱动选项共享业务池（8）和 checkpoint/维护池（4）。
+`_cursor()` 借用短事务连接；显式事务持有同一连接及 backend 锁，失败不会重拨后续写。
+两类池均 `min_size=0`、`max_idle=600`，取连接时探测存活；排队上限 64、等待上限 30 秒。
+租约 `close()` 幂等且等待本实例操作，最后引用释放才销毁共享池；checkpoint DDL 按池串行初始化一次，失败释放租约并允许重试。
+导出通过 backend cursor，vacuum/check/compact 与 checkpoint 共用 autocommit 池；取舍见 ADR-040。
 
 ### 数据与写入
 

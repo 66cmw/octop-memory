@@ -17,6 +17,7 @@ Postgres tests skip when psycopg is missing or no server answers.
 from __future__ import annotations
 
 import os
+import threading
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -155,18 +156,15 @@ def backend(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Any]:
         be.close()
         return
 
-    psycopg = pytest.importorskip("psycopg", reason="psycopg not installed")
+    request.getfixturevalue("postgres_dsn")
     from octop_memory.storage.backends.postgres import PostgresMemoryBackend
 
     ns = f"parity_{uuid.uuid4().hex[:12]}"
-    try:
-        be = PostgresMemoryBackend(namespace=ns, dsn=PG_DSN)
-    except psycopg.OperationalError:
-        pytest.skip("PostgreSQL not available")
+    be = PostgresMemoryBackend(namespace=ns, dsn=PG_DSN)
     try:
         yield be
     finally:
-        if not be._conn.closed:
+        if not be._closed:
             be.purge_namespace()
         be.close()
 
@@ -185,7 +183,8 @@ def _expect_duplicate(backend: Any) -> type[BaseException]:
 def _recover(backend: Any) -> None:
     """Postgres aborts the whole transaction on error; SQLite does not."""
     if not isinstance(backend, SqliteMemoryBackend):
-        backend._conn.rollback()
+        # Operation/transaction contexts now return a clean connection.
+        assert backend._conn is None
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +206,60 @@ def _make_raw(**overrides: Any) -> RawEvent:
     }
     base.update(overrides)
     return RawEvent(**base)
+
+
+@pytest.mark.parametrize("rollback", [False, True])
+def test_threaded_writes_keep_independent_transaction_boundaries(backend: Any, rollback: bool) -> None:
+    """A second thread must not commit or roll back the first thread's writes."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    entered, release, other_started, other_done = (threading.Event() for _ in range(4))
+
+    class Rollback(Exception):
+        pass
+
+    def owner() -> None:
+        try:
+            with backend.transaction():
+                with backend.transaction():  # Nested writes stay in the outer transaction.
+                    backend.save_raw(_make_raw(id="owned"))
+                entered.set()
+                assert release.wait(timeout=5)
+                if rollback:
+                    raise Rollback
+        except Rollback:
+            pass
+
+    def other() -> None:
+        other_started.set()
+        backend.save_raw(_make_raw(id="independent"))
+        other_done.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(owner)
+        assert entered.wait(timeout=5)
+        second = pool.submit(other)
+        assert other_started.wait(timeout=5)
+        try:
+            assert not other_done.wait(timeout=0.05)
+        finally:
+            release.set()
+        first.result(timeout=5)
+        second.result(timeout=5)
+    assert (backend.get_raw("owned") is None) is rollback
+    assert backend.get_raw("independent") is not None
+
+
+def test_failed_standalone_write_does_not_pin_an_aborted_transaction(backend: Any) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    backend.save_raw(_make_raw(id="existing"))
+    with pytest.raises(_expect_duplicate(backend)):
+        backend.save_raw(_make_raw(id="existing"))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(backend.save_raw, _make_raw(id="after_failure"))
+        pending.result(timeout=5)
+    assert backend.get_raw("after_failure") is not None
 
 
 def _make_candidate(**overrides: Any) -> Candidate:

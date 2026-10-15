@@ -16,6 +16,16 @@
 
 ## 当前任务
 
+### Octop #2060：多 agent 文件描述符与 PostgreSQL 连接容量
+
+- **状态 / 链接**：SQLite 与 PG 实现、本仓和宿主验证完成，待审阅及发布；[Octop#2060](https://github.com/TencentCloud/Octop/issues/2060)、[memory PR#19](https://github.com/TencentCloud/octop-memory/pull/19)。
+- **问题与场景**：SQLite 按线程缓存连接，常驻 worker 接触多个 agent 后保留“线程 × agent”条连接；69 个实例可耗尽 1024 fd，旧 close 还会打断在途事务。PG 每 agent 一条业务连接加独立 checkpoint 池，69 个活跃实例达到 138 条会话；真实 PG `max_connections=100` 时第 31 个 checkpoint 超时，空闲回收挡不住活跃峰值。
+- **范围与验收**：SQLite 每 backend 一条连接，完整 SQL/事务共用可重入锁，close 等待且不重开。PG 同一进程与连接配置共享业务 8 条、checkpoint/维护 4 条预算，显式事务保留一条连接；checkout 有界等待，关闭一实例不影响其它实例，最后引用关闭池。SQLite checkpoint 仍独立；schema、召回 source/排序和 public API 不变。
+- **方案与关键文件**：`storage/backends/sqlite.py` 的操作锁与失败回滚；内部 vacuum/WAL truncate/export 遵守锁。`postgres_pool.py` 管理共享池、引用租约与初始化串行；`postgres.py` 借用连接，`core.py` 失败时释放 checkpoint 租约，导出与 PG 维护进入池预算。取舍见 ADR-039/040。
+- **验证**：使用专用 `TEST_POSTGRES_DSN` 执行 `make all RUN='uv run --offline --no-sync'`，format、lint、strict mypy 均通过，pytest 为 1420 passed / 4 skipped；真实 PG 用例均运行。跳过项为 Linux `/proc`、两项 Hermes checkout E2E 和 dashboard extra。新增真实 PG 容量、排队/超时恢复、坏连接探测、空闲回收、初始化失败、跨 agent 事务与幂等关闭断言替代旧连接私有字段 mock。Octop 加载新源码的定向联调 95 passed，包含 6 项真实 PG 维护测试。
+- **宿主容量复现**：SQLite 69 个真实 MemoryRuntime 在 soft NOFILE=1024 下，4/8 worker 访问及 30 次重建维持 348 fd，全部关闭回到 3。PG 在服务端 100 连接、进程 1024 fd 限制下，69 个真实 MemoryRuntime 创建/全部 checkpoint 预热分别仅占 1/2 条会话，8 worker 混合访问峰值 12；30 次重建不增长，关闭一个实例后其它实例仍可用，全部关闭会话归零且 fd 回到 3。
+- **接续**：CI/release 已配置专用 PG，显式测试 DSN 不可用时失败。无数据迁移；慢 SQL/长事务会占用池，饱和明确报错。预算按进程与连接配置计数，宿主控制面另计。发布后 Octop 需更新 memory 依赖才能消费修复。PROJECT_MAP、DECISIONS、TEST_MATRIX、KNOWN_RISKS 与中英文 README 已同步。
+
 ### Octop 命名收尾
 
 - **状态**：命名清理完成；真实 PostgreSQL、Hermes checkout 和 dashboard 可选环境未验。
