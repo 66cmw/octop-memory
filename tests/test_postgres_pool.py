@@ -33,6 +33,17 @@ def _sessions(admin: Any, dsn: str) -> int:
     return int(admin.execute("SELECT count(*) FROM pg_stat_activity WHERE application_name=%s", (app,)).fetchone()[0])
 
 
+def _wait_for_sessions(admin: Any, dsn: str, expected: int = 0) -> None:
+    # PQfinish closes the client socket synchronously. The remote backend
+    # exits asynchronously, so its pg_stat_activity row can briefly remain.
+    deadline = time.monotonic() + 5
+    observed = _sessions(admin, dsn)
+    while observed != expected and time.monotonic() < deadline:
+        time.sleep(0.01)
+        observed = _sessions(admin, dsn)
+    assert observed == expected
+
+
 def _close(memory: Memory) -> None:
     if memory._checkpointer_pool is not None:
         memory._checkpointer_pool.close()
@@ -81,7 +92,12 @@ def test_69_agents_share_a_bounded_budget_under_mixed_load(pool_dsn: str, postgr
         assert len({id(m.backend._pool._entry) for m in memories}) == 1
         assert len({id(m._checkpointer_pool._entry) for m in memories}) == 1
         stack.close()
-        assert _sessions(admin, pool_dsn) == 0
+        for memory in memories:
+            for lease in (memory.backend._pool, memory._checkpointer_pool):
+                assert lease.closed
+                assert lease._entry.refs == 0
+                assert lease._entry.pool.closed
+        _wait_for_sessions(admin, pool_dsn)
 
 
 def test_pool_exhaustion_times_out_then_recovers(pool_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -147,7 +163,7 @@ def test_close_is_per_owner_idempotent_and_waits_for_query(pool_dsn: str, postgr
         with second.connection() as conn:
             assert conn.execute("SELECT 1 AS n").fetchone() == {"n": 1}
         second.close()
-        assert _sessions(admin, pool_dsn) == 0
+        _wait_for_sessions(admin, pool_dsn)
 
 
 def test_idle_pool_releases_and_reconnects(pool_dsn: str, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,7 +206,7 @@ def test_checkpoint_setup_failure_releases_lease_and_can_retry(
         with pytest.raises(RuntimeError, match="injected setup failure"):
             first._ensure_checkpointer()
         assert first._checkpointer_pool is None
-        assert _sessions(admin, pool_dsn) == before
+        _wait_for_sessions(admin, pool_dsn, expected=before)
         first._ensure_checkpointer()
         second._ensure_checkpointer()
         assert calls == 2  # one failed attempt, one successful shared setup
@@ -264,7 +280,7 @@ def test_business_bootstrap_failure_releases_pool(
         monkeypatch.setattr(PostgresMemoryBackend, "_init_schema", fail)
         with pytest.raises(RuntimeError, match="injected bootstrap failure"):
             PostgresMemoryBackend("failed_bootstrap", dsn=pool_dsn)
-        assert _sessions(admin, pool_dsn) == 0
+        _wait_for_sessions(admin, pool_dsn)
         monkeypatch.setattr(PostgresMemoryBackend, "_init_schema", original)
         with ExitStack() as stack:
             memory = _memory(stack, pool_dsn)

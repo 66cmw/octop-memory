@@ -33,6 +33,7 @@ PG skip 不算通过。CI/release 启动专用 PostgreSQL 16，`TEST_POSTGRES_DS
 `test_postgres_pool.py` 验证 69 个实例混合读写和 checkpoint 的总连接数 ≤12，覆盖池满超时/排队上限、
 空闲归零与重连、服务端断开空闲连接、初始化失败重试、维护共用预算以及关闭不影响其它实例。
 空闲测试只缩短测试进程内的回收周期；生产保留 `max_idle=600`。
+关闭测试先断言租约已关闭、引用归零和真实池已关闭，再限时等待远端 `pg_stat_activity` 归零；客户端关闭 socket 不代表远端进程已同步退出。
 backend-specific 能力必须显式拒绝另一 backend 并记录限制。
 测试使用 `tmp_path`，不能写用户真实记忆库；可选依赖和宿主 E2E 的 skip 单独报告。
 `test_fd_pressure.py` 在独立 POSIX 子进程中将 soft NOFILE 设为 1024，验证 69 个临时 Memory
