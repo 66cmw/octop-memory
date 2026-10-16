@@ -199,3 +199,19 @@ LangGraph 按类型要求 ConnectionPool；内部租约适配器继承该类型�
 ## ADR-041：按来源隔离运行诊断，保护用户知识（Accepted）
 
 运行失败的发生事实不等于可长期使用的知识。octop-harness / Octop 使用 `on_failure="error"` 让模型失败保留为 checkpoint 异常，由宿主单独展示；团队自动失败通知排除采集。仍合成错误回复的宿主需标记来源，memory 在 capture、两类 extractor、promotion 和 raw prompt recall 复用 domain retention policy；兼容已知旧版重试失败信封，不用通用错误词黑名单。提炼 v2.4 先判断长期价值，再评分，保留已验证排障经验与用户明确保留的历史事件。存量治理默认预览，显式 apply 通过现有事务和 deprecate/reject 接口软停用来源明确的自动记录，保留 raw 与决策审计；人工批准/编辑/保存及证据含糊的记录不自动停用，不自动改写用户数据或引入新 schema。
+
+## ADR-042：手动文档为准，冲突转候选，去重绑定会话快照（Accepted）
+
+USER.md/MEMORY.md 由宿主用户维护，聊天原有统一加载器只在 session 首次加载全文。
+memory 接收当前文件作治理，不负责文件读写或刷新提示词；宿主保存后显式核对，并可在普通保存/
+自动晋升后通过 provider 检查。⚠️ 召回/写入路径变更：只有同主体/字段/时间范围的高置信互斥事实、
+且模型引用真实完整原文，才在同一 backend 事务内软停用旧 Atom、建立替代事实 Candidate 和 Journal。
+原始证据不删，未审核替代事实不晋升；旧 raw 不再自动兜底，dirty 页面等待重建。
+历史事件、正常排障经验、不同情境及两个手动文档互相矛盾时不强行改判。
+
+重复 Atom 不删，召回只在实际 session snapshot 含同一信息时抑制；不会把新文件版本硬塞入旧会话。
+元数据保存对账版本和审计比较快照；独立小清单参与 recall cache key，避免旧缓存复活。
+模型失败、不确定、伪造证据、版本变化和超限均显式报告；每次最多 100 条新 Atom 可续查。
+采纳检查最后对账版本，宿主附当前文档可拦截未重新对账的变化。使用既有 Service/Bridge/
+retention/promotion/recall 模块及 backend contract，不建新 schema、全文索引或独立加载器。
+SQLite/真实 PG 同组测试验证事务、幂等、证据保留及 prompt 过滤。

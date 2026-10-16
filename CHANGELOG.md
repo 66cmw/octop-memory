@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 新增
+
+- 手动 USER.md／MEMORY.md 与普通记忆核对：手动文档优先，明确冲突将旧 Atom 软停用、替代事实转候选并保留来源审计；重复仅在匹配的会话上下文抑制召回。`MemoryService` / Bridge 共用对账、状态接口；宿主可注册文档读取器在保存/晋升后检查。语义判断须引用原文，不确定、模型失败、过期文档和未完成批次显式报告。SQLite/PostgreSQL 同组验证，不增加 schema。
+
 ### 修复
 
 - SQLite 每个 backend 复用一条连接，完整 SQL 操作与显式事务串行执行，避免多 agent 与常驻 worker 的连接数相乘；关闭等待正在进行的操作，独立失败写入回滚后再抛出异常（TencentCloud/Octop#2060）。

@@ -7,10 +7,28 @@ User/manual events always remain eligible, even when they quote that envelope.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Callable
 
 from octop_memory.types import Candidate, RawEvent
+
+MANUAL_DOCUMENTS_META_KEY = "manual_documents/v1"
+MANUAL_DOCUMENTS_RECALL_KEY = "manual_documents/recall/v1"
+
+
+def manual_documents_revision(documents: dict[str, str]) -> str:
+    """Revision of the two authoritative documents, including absent files."""
+    canonical = {name: documents.get(name, "") for name in ("USER.md", "MEMORY.md")}
+    return hashlib.sha256(json.dumps(canonical, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def normalize_manual_fact(text: str) -> str:
+    """Remove Markdown bullet/formatting whitespace while preserving factual values."""
+    text = re.sub(r"^\s*[-+*]\s+", "", text)
+    return " ".join(text.replace("**", "").replace("`", "").split())
+
 
 EXPLICIT_MEMORY_INTENT_RE = re.compile(
     r"(请记住|帮我记住|记住|记一下|记下来|记到记忆|加入记忆|保存到记忆|remember this|remember that|please remember|"

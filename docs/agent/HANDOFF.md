@@ -16,6 +16,14 @@
 
 ## 当前任务
 
+### 手动档案与普通记忆协同（PR #20 / harness #76 / Octop #2103）
+
+- **状态 / 场景**：实现与本仓完整验证完成，配套宿主收尾中。用户明确要求 USER.md 与 MEMORY.md 只由用户修改；冲突时手动文档优先，通知用户并降级到 Candidate 更新 octop-memory。
+- **范围与验收**：复用既有 retention/runtime/promotion/recall 模块，无新 source 模块或 schema；原文引用校验，软停用冲突旧 Atom，替代事实候选保留两侧证据；重复 Atom 仅按实际聊天快照抑制召回；无模型/不确定不强制停用。低层 Memory.store 仍是原始存储 API；宿主通过 Service provider 或显式核对启用治理。
+- **方案**：见 ADR-042 / PROJECT_MAP。完整文档只保存对账元数据，不全文导入/索引；小型召回清单参与 cache key，阻止旧 raw/dirty headline 回流。候选采纳校验对账版本，Octop 同时提交当前文件，拦截保存后尚未核对的版本变化。单次 100 条未核对 Atom 可续查。
+- **验证**：`TEST_POSTGRES_DSN='dbname=octop_memory_retention_test' make all RUN='.venv/bin/python -m'` format/lint/strict mypy 通过，1483 passed / 4 skipped；真实 PG 均运行。专用 PG 与 SQLite 手动文档同组用例 8 passed；新增单测覆盖模型缺失/伪造/不确定、事务回滚、旧版本采纳、save/自动晋升、分批续查和 recall cache 隔离。四项 skip 为已有可选环境，非 PG。
+- **配套 / 接续**：harness 的文件工具写保护覆盖 USER.md/MEMORY.md，规则回归 AGENTS.md/BOOTSTRAP.md，原生统一 session 快照不变；Octop 复用强记忆编辑器新增用户档案、核对提示与候选跳转，支持停止 Agent。既有用户模板不会自动覆盖；外部宿主及旧版本候选处理边界见 KNOWN_RISKS。
+
 ### Octop #2060：多 agent 文件描述符与 PostgreSQL 连接容量
 
 - **状态 / 链接**：SQLite 与 PG 实现、本仓和宿主验证完成，待审阅及发布；[Octop#2060](https://github.com/TencentCloud/Octop/issues/2060)、[memory PR#19](https://github.com/TencentCloud/octop-memory/pull/19)。

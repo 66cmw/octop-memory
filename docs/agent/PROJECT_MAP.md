@@ -29,7 +29,14 @@ CLI → application / operations ───────────────�
 | `pipeline/` | extractor、promotion、page、episode、recall、lifecycle |
 | `adapters/` | JSON-RPC bridge、Click CLI、源码 dashboard |
 | `operations/migration/` | export/import、portable package、namespace migration、backfill |
-| `domain/retention.py`、`operations/retention.py` | 系统报错来源判定；存量预览和软停用 |
+| `domain/retention.py`、`operations/retention.py` | 系统报错来源判定；存量预览和软停用；USER.md/MEMORY.md 原文核对、冲突软停用/替代候选/审计元数据 |
+
+手动文档治理由 `MemoryService` / Bridge → `application.MemoryRuntime` → `operations.retention`
+共享实现。宿主提供当前文档/可选 freshness callback；save/自动 promotion 可注册 provider。
+`manual_documents/v1` 保存比较版本、已核对 assertion hash、未决候选和审计快照；小型
+`manual_documents/recall/v1` 保存召回抑制清单。原文不会批量导入 Atom/FTS。
+召回通过实际 session `manual_context` 去重，并屏蔽冲突旧 Atom 的 raw fallback 和待重建页面。
+审核候选校验对账版本；宿主还应在采纳时提供当前 `manual_documents`，拦截未重新核对的文件变化。
 
 portable 的 Agent 默认发现目录为 `~/.octop/agents/*/memory.sqlite` 与 `~/.octop-harness/*/memory.sqlite`；
 其它位置由 `list_sources(extra_paths=...)` 显式加入，不自动搬移数据。

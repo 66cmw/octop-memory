@@ -16,6 +16,7 @@ Postgres tests skip when psycopg is missing or no server answers.
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import uuid
@@ -43,6 +44,83 @@ from octop_memory.types import (
 )
 
 PG_DSN = os.environ.get("TEST_POSTGRES_DSN", "postgresql://localhost/octop_memory_test")
+
+
+class TestManualDocumentGovernanceParity:
+    class Model:
+        def call_llm(self, prompt: str, **kwargs: Any) -> str:
+            data = json.loads(prompt)
+            return json.dumps(
+                {
+                    "matches": [
+                        {
+                            "atom_id": atom["id"],
+                            "relation": "conflict",
+                            "document": "USER.md",
+                            "quote": "The user prefers Chinese replies.",
+                            "confidence": "high",
+                            "same_subject": True,
+                            "same_scope": True,
+                        }
+                        for atom in data["atoms"]
+                    ]
+                }
+            )
+
+    def test_conflict_candidate_deprecation_evidence_and_recall(self, backend: Any) -> None:
+        from octop_memory import Memory, MemoryService
+        from octop_memory.application.dashboard_data import promote_candidate
+        from octop_memory.pipeline.recall import recall_for_prompt
+
+        memory = Memory(namespace="manual_parity", backend=backend)
+        memory.store("The user prefers English replies.")
+        old = memory.list_atoms()[0]
+        service = MemoryService(memory, llm=self.Model())
+        docs = {"USER.md": "The user prefers Chinese replies."}
+        first = service.reconcile_manual_documents(docs)
+        assert first["conflicts"] == 1
+        assert memory.get_atom(old.id).deprecated_at is not None
+        assert memory.get_raw(old.quote_event_id) is not None
+        assert not recall_for_prompt(memory, "English", raw_policy="always").snippets
+        assert service.reconcile_manual_documents(docs)["conflicts"] == 1
+        candidate = memory.list_candidates(status="conflict")[0]
+        assert candidate.payload["demoted_atom_id"] == old.id
+        promote_candidate(memory, {"candidate_id": candidate.id})
+        assert [a.assertion for a in memory.list_atoms()] == [docs["USER.md"]]
+
+    @pytest.mark.parametrize("filename", ["USER.md", "MEMORY.md"])
+    def test_duplicate_uses_session_snapshot_without_deleting_atom(self, backend: Any, filename: str) -> None:
+        from octop_memory import Memory, MemoryService
+
+        memory = Memory(namespace="manual_parity", backend=backend)
+        memory.store("Aurora uses PostgreSQL.")
+        service = MemoryService(memory)
+        docs = {filename: "Aurora uses PostgreSQL."}
+        assert service.reconcile_manual_documents(docs)["duplicates"] == 1
+        assert not service.recall("PostgreSQL", manual_context=docs).snippets
+        assert service.recall("PostgreSQL").snippets
+        assert len(memory.list_atoms()) == 1
+
+    def test_quarantine_rolls_back_on_failure(self, backend: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        from octop_memory import Memory, MemoryService
+        from octop_memory.domain.retention import MANUAL_DOCUMENTS_META_KEY
+
+        memory = Memory(namespace="manual_parity", backend=backend)
+        memory.store("The user prefers English replies.")
+        raw_ids = {event.id for event in memory.list_raw()}
+
+        def fail(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("candidate write failed")
+
+        monkeypatch.setattr(memory, "add_candidate", fail)
+        with pytest.raises(RuntimeError, match="candidate write failed"):
+            MemoryService(memory, llm=self.Model()).reconcile_manual_documents(
+                {"USER.md": "The user prefers Chinese replies."}
+            )
+        assert len(memory.list_atoms()) == 1
+        assert memory.list_candidates(status="conflict") == []
+        assert {event.id for event in memory.list_raw()} == raw_ids
+        assert memory.get_meta(MANUAL_DOCUMENTS_META_KEY) is None
 
 
 class TestRuntimeErrorRetentionParity:

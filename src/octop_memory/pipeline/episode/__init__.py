@@ -117,7 +117,11 @@ class EpisodeExtractor:
         session_id: str | None = None,
     ) -> EpisodeExtractionResult:
         """Run extraction on a batch of raw events."""
-        events = [event for event in events if not is_runtime_error(event)]
+        events = [
+            event
+            for event in events
+            if not is_runtime_error(event) and not event.payload.get("manual_document_evidence")
+        ]
         if not events:
             return EpisodeExtractionResult(episodes=[])
 

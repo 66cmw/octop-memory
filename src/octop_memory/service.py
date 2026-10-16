@@ -23,6 +23,8 @@ The model is injected as an :class:`~octop_memory.ports.llm.LLMClient`; without 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from octop_memory.application.config import MemoryRuntimeConfig
@@ -49,6 +51,8 @@ class MemoryService:
         host_files: optional host Markdown index for file-shaped ``get``.
         host: the ``RawEvent.host`` tag stamped on captured events
             (e.g. ``"octop-harness"`` / ``"hermes"``).
+        manual_documents_provider: optional backend-aware reader of USER.md and
+            MEMORY.md, used after saves/promotions, never per prompt turn.
     """
 
     def __init__(
@@ -59,10 +63,17 @@ class MemoryService:
         config: MemoryRuntimeConfig | dict[str, Any] | None = None,
         host_files: Any | None = None,
         host: str = _DEFAULT_HOST,
+        manual_documents_provider: Callable[[], dict[str, str]] | None = None,
     ) -> None:
         self._memory = memory
         self._host = host
-        self._runtime = MemoryRuntime(memory, host_files=host_files, config=config, llm=llm)
+        self._runtime = MemoryRuntime(
+            memory,
+            host_files=host_files,
+            config=config,
+            llm=llm,
+            manual_documents_provider=manual_documents_provider,
+        )
 
     @property
     def memory(self) -> Memory:
@@ -80,6 +91,7 @@ class MemoryService:
         thread_id: str | None = None,
         session_id: str | None = None,
         limit: int = DEFAULT_RECALL_LIMIT,
+        manual_context: dict[str, str] | None = None,
     ) -> RecallResult:
         """Recall relevant memories as prompt-injectable text.
 
@@ -87,6 +99,8 @@ class MemoryService:
         markdown block or ``.snippets`` to format your own. No model required.
         ``session_id`` (falling back to ``thread_id``) excludes raw from
         the current conversation so auto-inject does not echo this turn.
+        ``manual_context`` is the actual session document snapshot; duplicates
+        are suppressed only against that supplied context.
         """
         return recall_for_prompt(
             self._memory,
@@ -94,7 +108,19 @@ class MemoryService:
             thread_id=thread_id,
             session_id=session_id,
             limit=limit,
+            manual_context=manual_context,
         )
+
+    def reconcile_manual_documents(
+        self, documents: dict[str, str], *, is_current: Callable[[], bool] | None = None
+    ) -> dict[str, Any]:
+        """Compare user-owned documents with atoms; quarantine conflicts for review.
+
+        The caller supplies current file contents, never a stale chat snapshot.
+        ``is_current`` can cancel applying a plan if files changed during analysis.
+        Partial/unavailable semantic checks are explicit in the result.
+        """
+        return self._runtime.reconcile_manual_documents({"documents": documents}, is_current=is_current)
 
     def search(
         self,
@@ -147,7 +173,19 @@ class MemoryService:
         enter the canonical atom/tree path instead of being kept only as raw
         transcript events.
         """
-        return self._memory.store(content, topic=topic, metadata=metadata)
+        node = self._memory.store(content, topic=topic, metadata=metadata)
+        review = self._runtime.review_new_memory()
+        if review is not None:
+            atom = self._memory.get_atom(node.atom_id) if node.atom_id else None
+            node = replace(
+                node,
+                metadata={
+                    **node.metadata,
+                    "manual_document_review": review,
+                    "manual_document_conflict": bool(atom and atom.deprecated_at),
+                },
+            )
+        return node
 
     def capture_turn(
         self,

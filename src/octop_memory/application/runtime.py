@@ -6,6 +6,7 @@ import logging
 import re
 import uuid
 from collections import OrderedDict
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -82,6 +83,7 @@ class MemoryRuntime:
         host_files: HostFilesIndex | None = None,
         config: MemoryRuntimeConfig | dict[str, Any] | None = None,
         llm: LLMClient | None = None,
+        manual_documents_provider: Callable[[], dict[str, str]] | None = None,
     ) -> None:
         """Construct a runtime.
 
@@ -103,6 +105,7 @@ class MemoryRuntime:
         self._config = coerce_runtime_config(config)
         self._llm = llm if llm is not None else _build_llm_client(self._config.llm)
         self._llm_configured = not isinstance(self._llm, NoopLLMClient)
+        self._manual_documents_provider = manual_documents_provider
         # session_id → ids of raw events already fed to the extractor.
         # See _MAX_TRACKED_SESSIONS for why this exists.
         self._extracted_ids: OrderedDict[str, set[str]] = OrderedDict()
@@ -123,6 +126,46 @@ class MemoryRuntime:
     # ------------------------------------------------------------------
     # Operations
     # ------------------------------------------------------------------
+
+    def reconcile_manual_documents(
+        self, params: dict[str, Any], *, is_current: Callable[[], bool] | None = None
+    ) -> dict[str, Any]:
+        """Shared in-process/RPC manual-document governance operation."""
+        from octop_memory.operations.retention import reconcile_manual_documents
+
+        documents = params.get("documents")
+        if not isinstance(documents, dict) or any(
+            not isinstance(k, str) or not isinstance(v, str) for k, v in documents.items()
+        ):
+            raise ValueError("documents must map filenames to text")
+        return reconcile_manual_documents(
+            self._memory, documents, llm=self._llm if self._llm_configured else None, is_current=is_current
+        )
+
+    def manual_document_review_status(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Read audit status without changing memory or calling a model."""
+        from octop_memory.operations.retention import manual_document_review_status
+
+        documents = params.get("documents")
+        if documents is not None and (
+            not isinstance(documents, dict) or any(not isinstance(v, str) for v in documents.values())
+        ):
+            raise ValueError("documents must map filenames to text")
+        return manual_document_review_status(self._memory, documents)
+
+    def review_new_memory(self) -> dict[str, Any] | None:
+        """Check writes against current owner files without refreshing chat snapshots."""
+        provider = self._manual_documents_provider
+        if provider is None:
+            return None
+        try:
+            documents = provider()
+            if not any(body.strip() for body in documents.values()):
+                return None
+            return self.reconcile_manual_documents({"documents": documents}, is_current=lambda: provider() == documents)
+        except REPORTABLE_ERRORS:
+            logger.warning("Manual-document review after memory write is unavailable", exc_info=True)
+            return {"status": "unavailable"}
 
     def stats(self, params: dict[str, Any]) -> dict[str, Any]:
         """Return status data for `openclaw octopmemory status`."""
@@ -577,6 +620,8 @@ class MemoryRuntime:
                 "llm_calls": promo.llm_calls,
             }
             response["llm_calls"] += promo.llm_calls
+            if promo.promoted or promo.merged:
+                response["manual_documents"] = self.review_new_memory()
 
         # Page regen needs the heavy tier — pointless against a Noop
         # client (every page would just record a regen failure).
@@ -651,6 +696,8 @@ class MemoryRuntime:
             "llm_calls": promo.llm_calls,
             "pages": None,
         }
+        if promo.promoted or promo.merged:
+            response["manual_documents"] = self.review_new_memory()
         if regen_pages and self._llm_configured:
             extraction_cfg = self._extraction_cfg()
             batch = regenerate_dirty(

@@ -16,6 +16,7 @@
 | 运行报错 | octop-harness / Octop 主路径抛出异常，团队自动失败通知排除采集；capture/extractor/promotion/raw recall 按来源排除自定义/旧版合成报错；维护操作默认预览，apply 只软停用可确认的自动报错，保护用户意图和排障经验；`domain/retention.py`、`operations/retention.py` |
 | 宿主接入 | OpenClaw/Hermes 共享一份指南；真实 host hook、安装环境与纯 Python 单测分开验证 |
 | 数据维护 | 不将去重、retention、vacuum 混为一谈；明确备份、offline 声明与旧 reader 兼容性 |
+| 手动文档 | 手动 USER.md/MEMORY.md 优先；显式核对/写入后 provider 检查，原文证据与置信校验、事务软停用和替代候选；重复仅按实际 session 快照抑制，完整文档不入 Atom/索引；限量/失败状态可见；`service.py`、`operations/retention.py`、`pipeline/recall/` |
 | 发布内容 | sdist allowlist、wheel 与独立插件分别验证；不将源码 dashboard 宣称为 wheel 功能 |
 
 实现入口与命令统一见 [PROJECT_MAP](PROJECT_MAP.md)、[TEST_MATRIX](TEST_MATRIX.md)。
