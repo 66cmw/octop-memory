@@ -9,6 +9,9 @@
 | Memory / runtime | `uv run pytest tests/test_core.py tests/test_service.py -q` |
 | 召回 | `uv run pytest tests/test_recall_pipeline.py tests/test_recall_multi_source.py tests/test_recall_risk_fixes.py -q` |
 | 提炼 | `uv run pytest tests/test_extractor.py tests/test_promotion.py -q` |
+| 运行报错隔离 / 存量治理 | `uv run pytest tests/test_runtime_error_retention.py tests/test_bridge_server.py tests/test_backend_parity.py -q -rs`；真实 PG 验证仅结构化标记过滤、未知来源只列审核清单、任意措辞手动保存、无短句意图例外、raw fallback、晋升、人工保护、幂等和事务回滚 |
+| 手动文档治理 | `uv run pytest tests/test_manual_documents.py tests/test_backend_parity.py -q -rs`；真实专用 PG 的 `-k ManualDocument` 与 SQLite 同组验证冲突/替代候选、原证据保留、raw fallback、快照去重、幂等与回滚；单测覆盖伪造/不确定证据、过期采纳、缓存失效、分批续查、save/自动晋升钩子 |
+| 宿主失败来源边界 | 在 octop-harness 运行 `pytest tests/test_model_retry_middleware.py tests/test_memory_middleware.py tests/test_teams/test_inbox.py`：真实图 checkpoint error / 恢复、零错误 raw 写入、团队自动通知排除；WebUI / IM / 团队失败展示在 Octop 测试 |
 | 写入 / backend | `uv run pytest tests/test_memory_atom_write.py tests/test_backend_parity.py -q -rs` |
 | 连接 / 事务 / fd | `uv run pytest tests/test_sqlite.py tests/test_fd_pressure.py tests/test_postgres_pool.py tests/test_backend_parity.py -q -rs`；设置专用 `TEST_POSTGRES_DSN`，确认 PG 用例实际运行 |
 | 向量接口 / 可选 index | `uv run pytest tests/test_vector_chroma.py -q`；使用 mock index 和 `tmp_path` 数据库，不访问默认数据目录 |

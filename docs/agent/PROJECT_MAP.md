@@ -29,6 +29,14 @@ CLI → application / operations ───────────────�
 | `pipeline/` | extractor、promotion、page、episode、recall、lifecycle |
 | `adapters/` | JSON-RPC bridge、Click CLI、源码 dashboard |
 | `operations/migration/` | export/import、portable package、namespace migration、backfill |
+| `domain/retention.py`、`operations/retention.py` | 系统报错来源判定；存量预览和软停用；USER.md/MEMORY.md 原文核对、冲突软停用/替代候选/审计元数据 |
+
+手动文档治理由 `MemoryService` / Bridge → `application.MemoryRuntime` → `operations.retention`
+共享实现。宿主提供当前文档/可选 freshness callback；save/自动 promotion 可注册 provider。
+`manual_documents/v1` 保存比较版本、已核对 assertion hash、未决候选和审计快照；小型
+`manual_documents/recall/v1` 保存召回抑制清单。原文不会批量导入 Atom/FTS。
+召回通过实际 session `manual_context` 去重，并屏蔽冲突旧 Atom 的 raw fallback 和待重建页面。
+审核候选校验对账版本；宿主还应在采纳时提供当前 `manual_documents`，拦截未重新核对的文件变化。
 
 portable 的 Agent 默认发现目录为 `~/.octop/agents/*/memory.sqlite` 与 `~/.octop-harness/*/memory.sqlite`；
 其它位置由 `list_sources(extra_paths=...)` 显式加入，不自动搬移数据。
@@ -68,6 +76,8 @@ PostgreSQL 的 `postgres_pool.py` 按进程、规范化 DSN 与驱动选项共�
 Candidate 可自动晋升、合并、丢弃或进入 conflict/needs_review，不能等同于全量人工审核队列。
 Episode 从 RawEvent 独立提炼；页面由 dirty 标记和 regeneration 触发更新，不承诺每次写入即时刷新。
 自动提炼使用注入的 `LLMClient`；无模型时 capture 和 FTS 可用，提炼返回不可用原因。
+
+octop-harness 主路径使用 `on_failure="error"`，失败写入 checkpoint task error，不产生合成助手回复；团队自动失败通知使用 `configurable.octop_memory_capture_exclude=true` 排除整轮采集。自定义宿主仍合成错误时必须使用 `payload.octop_runtime_error=true`。capture、Candidate/Episode extractor、promotion 及 raw prompt recall 只共用结构化来源规则，无记忆意图/排障价值关键词。Agent 自行调用 memory_save；后台采集只保留既有长度等策略，不为特定措辞放行短句。`audit_runtime_errors` 默认预览，显式 apply 也只在全部证据带错误标记时停用自动 Atom、拒绝未决 Candidate。旧版严格报错格式仅在 operations 层生成审核提示，缺失/混合来源返回 review_*_ids，原状态不改；原始证据不改写，人工保存/批准/编辑按来源保护。
 
 `Memory.store()` 的 leaf 写入使用手工 RawEvent/Candidate/AtomCard 路径，无需 LLM。
 `root → branch → leaf` 是组织树，leaf 用 `atom_id` 投影事实正文，不复制第二份事实。

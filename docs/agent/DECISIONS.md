@@ -61,7 +61,7 @@ OpenClaw 在 prompt build 前调用可选 `recallPrefetcher`，把结果交给�
 
 ## ADR-012：capture 兼容短 CJK 消息并剥离 think（Accepted）
 
-共享 capture policy 使用 CJK 加权长度和显式记忆意图，在判长与入库前剥离 `<think>`。
+共享 capture policy 使用 CJK 加权长度，在判长与入库前剥离 `<think>`；不再按显式记忆意图关键词给短消息放行，主动保存由 Agent 调用 memory_save。
 避免各宿主重复实现过滤与推理文本回灌；代价是边界消息可能被过滤，修改阈值时验证多语言样本。
 
 ## ADR-021：分层目录与共享 MemoryRuntime（Accepted）
@@ -195,3 +195,23 @@ LangGraph 按类型要求 ConnectionPool；内部租约适配器继承该类型�
 不无限开连接或重放可能已提交的写入。此预算是进程内边界；多进程、不同连接配置及宿主控制面仍需各自计入服务端容量。
 无 schema、持久化编码、召回排序或 namespace 契约变更。真实 PG 回归覆盖 69 agent、事务/隔离、
 饱和与恢复、空闲/坏连接、初始化失败及关闭引用；SQLite 保持同组公共行为断言。
+
+## ADR-041：按来源隔离运行诊断，保护用户知识（Accepted）
+
+运行失败的发生事实不等于可长期使用的知识。octop-harness / Octop 使用 `on_failure="error"` 让模型失败保留为 checkpoint 异常，由宿主单独展示；团队自动失败通知排除采集。仍合成错误回复的宿主必须标记 `payload.octop_runtime_error=true`，memory 在 capture、两类 extractor、promotion 和 raw prompt recall 仅按结构化来源排除。移除“记住”与“已验证”等意图/价值词表；主动保存由 Agent 自行调用 memory_save，手动写入、人工批准/编辑按来源保护。提炼模型判断普通对话的长期价值。⚠️ 召回/写入路径变更：后台采集不再给意图短句特例；存量治理即使 apply 也只软停用全部证据均带错误标记的自动记录。旧版严格重试失败格式仅在 operations 审核清单中使用，缺失或混合来源保留原状态、返回 review_*_ids；不据文字推断来源，不删 raw 或新增 schema。
+
+## ADR-042：手动文档为准，冲突转候选，去重绑定会话快照（Accepted）
+
+USER.md/MEMORY.md 由宿主用户维护，聊天原有统一加载器只在 session 首次加载全文。
+memory 接收当前文件作治理，不负责文件读写或刷新提示词；宿主保存后显式核对，并可在普通保存/
+自动晋升后通过 provider 检查。⚠️ 召回/写入路径变更：只有同主体/字段/时间范围的高置信互斥事实、
+且模型引用真实完整原文，才在同一 backend 事务内软停用旧 Atom、建立替代事实 Candidate 和 Journal。
+原始证据不删，未审核替代事实不晋升；旧 raw 不再自动兜底，dirty 页面等待重建。
+历史事件、正常排障经验、不同情境及两个手动文档互相矛盾时不强行改判。
+
+重复 Atom 不删，召回只在实际 session snapshot 含同一信息时抑制；不会把新文件版本硬塞入旧会话。
+元数据保存对账版本和审计比较快照；独立小清单参与 recall cache key，避免旧缓存复活。
+模型失败、不确定、伪造证据、版本变化和超限均显式报告；每次最多 100 条新 Atom 可续查。
+采纳检查最后对账版本，宿主附当前文档可拦截未重新对账的变化。使用既有 Service/Bridge/
+retention/promotion/recall 模块及 backend contract，不建新 schema、全文索引或独立加载器。
+SQLite/真实 PG 同组测试验证事务、幂等、证据保留及 prompt 过滤。
