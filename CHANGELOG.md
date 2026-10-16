@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-16
+
+### 新增
+
+- 手动 USER.md／MEMORY.md 与普通记忆核对：手动文档优先，明确冲突将旧 Atom 软停用、替代事实转候选并保留来源审计；重复仅在匹配的会话上下文抑制召回。`MemoryService` / Bridge 共用对账、状态接口；宿主可注册文档读取器在保存/晋升后检查。语义判断须引用原文，不确定、模型失败、过期文档和未完成批次显式报告。SQLite/PostgreSQL 同组验证，不增加 schema。
+
+### 修复
+
+- SQLite 每个 backend 复用一条连接，完整 SQL 操作与显式事务串行执行，避免多 agent 与常驻 worker 的连接数相乘；关闭等待正在进行的操作，独立失败写入回滚后再抛出异常（TencentCloud/Octop#2060）。
+- PostgreSQL 按进程与连接配置共享有界池：业务最多 8 条，checkpoint/维护最多 4 条；操作归还连接、显式事务持有同一连接、最后引用关闭才销毁池。checkpoint 初始化串行复用，失败立即释放租约；修复 69 个活跃 agent 超出服务端连接上限的问题（TencentCloud/Octop#2060）。
+- PostgreSQL 容量、排队超限、空闲回收、断连恢复、初始化失败及引用关闭加入真实服务回归；CI 与 release 测试均启动专用 PostgreSQL，显式配置测试 DSN 不可用时失败而非跳过。
+- 系统运行报错仅按结构化来源标记隔离，不再自动采集、提炼或兜底召回。移除记忆意图、排障价值关键词及短消息意图例外，Agent 自行调用 memory_save；手工保存、人工批准按来源保护。存量预览/应用仅停用全部证据均带错误标记的自动记录，旧版报错文本、缺失或混合来源仅列入审核清单并保持原状态，保留原始证据与审计，SQLite/PostgreSQL 行为一致。
+
 ## [1.0.1] - 2026-10-09
 
 ### 修复
