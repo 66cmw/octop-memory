@@ -196,6 +196,8 @@ Candidate 是候选，不代表每条都要人工审批。promotion 会按价值
 
 prompt 召回默认路由 `atom`、`raw`；解析到 entity 时加入 `page_headline`，配置 vector index 后加入 `vector`。默认 raw fallback 策略在命中已提炼记忆时排除 raw；传入当前 session/thread 时排除本会话原始事件。
 
+系统生成的运行报错不自动进入长期记忆，也不通过历史 raw 兜底召回。octop-harness / Octop 将模型异常保留为 checkpoint 失败任务，由宿主单独显示错误；团队自动失败通知排除采集。仍生成合成报错的宿主使用 `payload.octop_runtime_error=true` 标记，并兼容已知旧版重试失败格式，不按 401、超时等关键词过滤用户输入。手工保存、用户批准、明确要求记住的事件与正常排障经验保持有效；原始诊断证据仍可按 ID 检查。维护操作 `operations.retention.audit_runtime_errors(memory)` 默认仅预览，显式 `apply=True` 才软停用来源明确的旧 Atom 并记录审计。
+
 贡献入口见 [CONTRIBUTING.md](CONTRIBUTING.md)，架构与数据流见[项目地图](docs/agent/PROJECT_MAP.md)。AI 协作规则见 [AGENTS.md](AGENTS.md)，任务澄清与交接沿用 [HANDOFF.md](docs/agent/HANDOFF.md)。
 
 ## 开发与验证

@@ -45,6 +45,133 @@ from octop_memory.types import (
 PG_DSN = os.environ.get("TEST_POSTGRES_DSN", "postgresql://localhost/octop_memory_test")
 
 
+class TestRuntimeErrorRetentionParity:
+    FAILURE = "Model call failed after 3 attempts with AuthenticationError: 401 token_expired"
+
+    def test_capture_and_legacy_raw_recall(self, backend: Any) -> None:
+        from octop_memory import Memory, MemoryService
+        from octop_memory.pipeline.recall import recall_for_prompt
+
+        memory = Memory(namespace="retention", backend=backend)
+        service = MemoryService(memory, config={"capture": {"min_message_chars": 0}})
+        result = service.capture_turn(user="记住：401 故障要验证修复成功。", assistant=self.FAILURE)
+        assert result["accepted"] == 1
+        assert result["skipped_runtime_error"] == 1
+        backend.save_raw(_make_raw(event_type="assistant_message", content=self.FAILURE, payload={"role": "assistant"}))
+        assert not recall_for_prompt(memory, "token_expired", raw_policy="always").snippets
+        assert memory.get_raw("raw-1") is not None
+
+    @pytest.mark.parametrize("protection", ["none", "explicit", "manual", "approved", "lesson", "edited", "missing"])
+    def test_audit_preview_soft_retirement_and_protections(self, backend: Any, protection: str) -> None:
+        from octop_memory import Memory
+        from octop_memory.operations.retention import audit_runtime_errors
+        from octop_memory.pipeline.recall import recall_for_prompt
+
+        memory = Memory(namespace="retention", backend=backend)
+        backend.save_raw(_make_raw(event_type="assistant_message", content=self.FAILURE, payload={"role": "assistant"}))
+        refs = ["raw-1"]
+        quote_id = "raw-1"
+        overrides: dict[str, Any] = {}
+        assertion = "Authentication token expired (401, token_expired)"
+        if protection == "explicit":
+            backend.save_raw(_make_raw(id="request", content="请记住：此次认证故障是历史事件。"))
+            refs.append("request")
+        elif protection == "manual":
+            overrides["extractor_version"] = "manual/v1"
+        elif protection == "approved":
+            overrides["decided_by"] = "user"
+        elif protection == "lesson":
+            assertion = "Verified fix: refresh credentials and confirm a successful request."
+            backend.save_raw(_make_raw(id="lesson", event_type="assistant_message", payload={}, content=assertion))
+            refs.append("lesson")
+            quote_id = "lesson"
+        elif protection == "missing":
+            refs.append("unknown")
+        backend.save_entity(_make_entity(atom_count=1))
+        backend.upsert_entity_page(_make_page(dirty=False, headline="token_expired"))
+        backend.save_candidate(
+            _make_candidate(
+                status="promoted",
+                assertion=assertion,
+                verbatim_quote=self.FAILURE,
+                raw_event_ids=refs,
+                quote_event_id=quote_id,
+                **overrides,
+            )
+        )
+        memory.add_atom(
+            _make_atom(
+                assertion=assertion,
+                verbatim_quote=self.FAILURE,
+                raw_event_ids=refs,
+                quote_event_id=quote_id,
+            )
+        )
+        atom_id = "atom-1"
+        if protection == "edited":
+            updated = memory.replace_atom("atom-1", assertion="Verified: refresh the token and check success.")
+            assert updated is not None
+            atom_id = updated.id
+
+        before = audit_runtime_errors(memory)
+        expected = ["atom-1"] if protection == "none" else []
+        assert before.atom_ids == expected
+        assert before.atoms_deprecated == 0
+        assert memory.get_atom(atom_id).deprecated_at is None
+        result = audit_runtime_errors(memory, apply=True)
+        assert result.atoms_deprecated == len(expected)
+        assert (memory.get_atom(atom_id).deprecated_at is not None) == bool(expected)
+        assert memory.get_raw("raw-1").content == self.FAILURE
+        assert audit_runtime_errors(memory, apply=True).atoms_deprecated == 0
+        if expected:
+            assert memory.get_entity_page("ent-1").dirty
+            assert not recall_for_prompt(memory, "token_expired", raw_policy="always").snippets
+            assert memory.list_journal(action="deprecate")[0].actor == "rule"
+
+    def test_pending_error_rejected_but_manual_save_stays(self, backend: Any) -> None:
+        from octop_memory import Memory
+        from octop_memory.operations.retention import audit_runtime_errors
+
+        memory = Memory(namespace="retention", backend=backend)
+        backend.save_raw(_make_raw(event_type="assistant_message", content=self.FAILURE, payload={"role": "assistant"}))
+        backend.save_candidate(_make_candidate())
+        manual = memory.store("记住：401 排障后需要验证请求成功。")
+        report = audit_runtime_errors(memory, apply=True)
+        assert report.candidates_rejected == 1
+        assert memory.get_candidate("cand-1").status == "rejected"
+        assert memory.get_atom(manual.atom_id).deprecated_at is None
+
+    def test_promotion_cannot_bypass_runtime_error_gate(self, backend: Any) -> None:
+        from octop_memory import Memory
+
+        memory = Memory(namespace="retention", backend=backend)
+        backend.save_raw(_make_raw(event_type="assistant_message", content=self.FAILURE, payload={"role": "assistant"}))
+        backend.save_candidate(_make_candidate())
+        assert memory.promote_candidates().dropped == 1
+        assert not memory.list_atoms()
+
+    def test_audit_rolls_back_if_a_decision_cannot_be_journaled(self, backend: Any, monkeypatch: Any) -> None:
+        from octop_memory import Memory
+        from octop_memory.operations.retention import audit_runtime_errors
+
+        memory = Memory(namespace="retention", backend=backend)
+        backend.save_raw(_make_raw(event_type="assistant_message", content=self.FAILURE, payload={"role": "assistant"}))
+        backend.save_entity(_make_entity(atom_count=1))
+        backend.save_candidate(_make_candidate(status="promoted"))
+        memory.add_atom(_make_atom())
+        backend.save_candidate(_make_candidate(id="pending"))
+
+        def fail(_: Any) -> None:
+            raise RuntimeError("injected journal failure")
+
+        monkeypatch.setattr(memory, "append_journal", fail)
+        with pytest.raises(RuntimeError, match="injected journal failure"):
+            audit_runtime_errors(memory, apply=True)
+        assert memory.get_atom("atom-1").deprecated_at is None
+        assert memory.get_candidate("pending").status == "pending"
+        assert not memory.list_journal(action="deprecate")
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

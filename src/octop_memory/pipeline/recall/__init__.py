@@ -27,6 +27,7 @@ from datetime import datetime
 from typing import Literal
 
 from octop_memory.core import Memory
+from octop_memory.domain.retention import is_runtime_error
 from octop_memory.pipeline.recall.rerank import RerankCandidate
 from octop_memory.storage.driver_errors import DRIVER_ERRORS
 from octop_memory.types import AtomCard, RawEvent
@@ -200,6 +201,8 @@ def recall_multi_source(
                 continue
             events = _multi_token_raw(memory, or_tokens, limit=wanted * 2)
             for e in events:
+                if is_runtime_error(e):
+                    continue
                 if len(snippets) >= limit:
                     break
                 if e.id in raw_ids_in_atoms:

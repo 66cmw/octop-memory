@@ -199,6 +199,8 @@ Manual `Memory.store()` needs no model and directly creates RawEvent/Candidate/A
 
 Prompt recall routes `atom` and `raw` by default, adds `page_headline` when an entity is resolved, and adds `vector` when configured. With the default raw fallback policy, durable hits suppress raw; passing the current session/thread excludes its raw events from prompt injection.
 
+Synthetic runtime failures are excluded from automatic capture, extraction and raw prompt fallback. octop-harness / Octop raise model errors into checkpoint task failures and display diagnostics separately; automatic team failure notifications are excluded from capture. Hosts that still create synthetic replies can mark them with `payload.octop_runtime_error=true`; the known legacy retry-failure envelope is also recognized. Error keywords alone never exclude user statements, verified troubleshooting knowledge or explicit/manual saves. Original diagnostics remain inspectable by ID. The maintenance operation `operations.retention.audit_runtime_errors(memory)` previews eligible legacy records by default; explicit `apply=True` soft-deprecates proven automatic error atoms and journals the decisions while protecting user approvals, edits and memory requests.
+
 Start with [CONTRIBUTING.md](CONTRIBUTING.md); the [project map](docs/agent/PROJECT_MAP.md) covers architecture and data flow. AI contributors use [AGENTS.md](AGENTS.md), with task clarification and handoff in [HANDOFF.md](docs/agent/HANDOFF.md).
 
 ## Development

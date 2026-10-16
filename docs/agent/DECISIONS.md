@@ -195,3 +195,7 @@ LangGraph 按类型要求 ConnectionPool；内部租约适配器继承该类型�
 不无限开连接或重放可能已提交的写入。此预算是进程内边界；多进程、不同连接配置及宿主控制面仍需各自计入服务端容量。
 无 schema、持久化编码、召回排序或 namespace 契约变更。真实 PG 回归覆盖 69 agent、事务/隔离、
 饱和与恢复、空闲/坏连接、初始化失败及关闭引用；SQLite 保持同组公共行为断言。
+
+## ADR-041：按来源隔离运行诊断，保护用户知识（Accepted）
+
+运行失败的发生事实不等于可长期使用的知识。octop-harness / Octop 使用 `on_failure="error"` 让模型失败保留为 checkpoint 异常，由宿主单独展示；团队自动失败通知排除采集。仍合成错误回复的宿主需标记来源，memory 在 capture、两类 extractor、promotion 和 raw prompt recall 复用 domain retention policy；兼容已知旧版重试失败信封，不用通用错误词黑名单。提炼 v2.4 先判断长期价值，再评分，保留已验证排障经验与用户明确保留的历史事件。存量治理默认预览，显式 apply 通过现有事务和 deprecate/reject 接口软停用来源明确的自动记录，保留 raw 与决策审计；人工批准/编辑/保存及证据含糊的记录不自动停用，不自动改写用户数据或引入新 schema。

@@ -29,6 +29,7 @@ CLI → application / operations ───────────────�
 | `pipeline/` | extractor、promotion、page、episode、recall、lifecycle |
 | `adapters/` | JSON-RPC bridge、Click CLI、源码 dashboard |
 | `operations/migration/` | export/import、portable package、namespace migration、backfill |
+| `domain/retention.py`、`operations/retention.py` | 系统报错来源判定；存量预览和软停用 |
 
 portable 的 Agent 默认发现目录为 `~/.octop/agents/*/memory.sqlite` 与 `~/.octop-harness/*/memory.sqlite`；
 其它位置由 `list_sources(extra_paths=...)` 显式加入，不自动搬移数据。
@@ -68,6 +69,8 @@ PostgreSQL 的 `postgres_pool.py` 按进程、规范化 DSN 与驱动选项共�
 Candidate 可自动晋升、合并、丢弃或进入 conflict/needs_review，不能等同于全量人工审核队列。
 Episode 从 RawEvent 独立提炼；页面由 dirty 标记和 regeneration 触发更新，不承诺每次写入即时刷新。
 自动提炼使用注入的 `LLMClient`；无模型时 capture 和 FTS 可用，提炼返回不可用原因。
+
+octop-harness 主路径使用 `on_failure="error"`，失败写入 checkpoint task error，不产生合成助手回复；团队自动失败通知使用 `configurable.octop_memory_capture_exclude=true` 排除整轮采集。自定义宿主仍合成错误时使用 `payload.octop_runtime_error=true`，旧版助手消息兼容严格的重试失败前缀。capture、Candidate/Episode extractor、promotion 及 raw prompt recall 共用来源规则；用户消息和手工证据不因报错关键词被排除。`audit_runtime_errors` 默认预览，显式 apply 后在事务内停用自动报错 Atom、拒绝未决报错 Candidate；原始证据不改写，dirty page 阻止旧 headline 召回。用户批准/编辑、手工写入、明确记忆请求及来源不完整的记录受到保护。
 
 `Memory.store()` 的 leaf 写入使用手工 RawEvent/Candidate/AtomCard 路径，无需 LLM。
 `root → branch → leaf` 是组织树，leaf 用 `atom_id` 投影事实正文，不复制第二份事实。

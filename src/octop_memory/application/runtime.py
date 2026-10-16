@@ -27,6 +27,7 @@ from octop_memory.application.path_projection import (
     render_raw_md,
     slice_lines,
 )
+from octop_memory.domain.retention import EXPLICIT_MEMORY_INTENT_RE, is_runtime_error
 from octop_memory.pipeline.episode import EpisodeExtractor
 from octop_memory.pipeline.extractor import CandidateExtractor
 from octop_memory.pipeline.page.regenerator import regenerate_dirty
@@ -59,12 +60,6 @@ session is re-extracted many times; tracking which raw event ids each
 session has already fed through the extractor makes repeat calls cheap
 (``no_new_events``) instead of burning an LLM call per turn."""
 
-
-EXPLICIT_MEMORY_INTENT_RE = re.compile(
-    r"(请记住|帮我记住|记住|记一下|记下来|记到记忆|加入记忆|保存到记忆|remember this|remember that|please remember|"
-    r"save this to memory|add this to memory)",
-    re.IGNORECASE,
-)
 
 SECRET_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9_-]{8,}"),
@@ -352,6 +347,7 @@ class MemoryRuntime:
         skipped_short = 0
         skipped_role = 0
         skipped_tool_result = 0
+        skipped_runtime_error = 0
 
         events_to_write: list[RawEvent] = []
         for raw in raw_events:
@@ -392,24 +388,25 @@ class MemoryRuntime:
                 continue
 
             timestamp = _parse_iso(raw.get("timestamp_iso")) or datetime.now(UTC)
-            content_to_store = _prepare_content(content, privacy_cfg)
-            payload_to_store = _prepare_payload(payload, role=role, capture_cfg=capture_cfg, privacy_cfg=privacy_cfg)
-            if privacy_cfg.get("store_raw_content") is False:
-                payload_to_store["content_redacted"] = True
-
-            events_to_write.append(
-                RawEvent(
-                    id=raw.get("id") or _gen_event_id(),
-                    host=host,
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    user=user,
-                    timestamp=timestamp,
-                    event_type=event_type,  # type: ignore[arg-type]
-                    content=content_to_store,
-                    payload=payload_to_store,
-                )
+            event = RawEvent(
+                id=raw.get("id") or _gen_event_id(),
+                host=host,
+                session_id=session_id,
+                thread_id=thread_id,
+                user=user,
+                timestamp=timestamp,
+                event_type=event_type,  # type: ignore[arg-type]
+                content=content,
+                payload=payload,
             )
+            if is_runtime_error(event):
+                skipped_runtime_error += 1
+                continue
+            event.content = _prepare_content(content, privacy_cfg)
+            event.payload = _prepare_payload(payload, role=role, capture_cfg=capture_cfg, privacy_cfg=privacy_cfg)
+            if privacy_cfg.get("store_raw_content") is False:
+                event.payload["content_redacted"] = True
+            events_to_write.append(event)
             accepted += 1
 
         # Single batch write = single fsync regardless of event count.
@@ -422,6 +419,7 @@ class MemoryRuntime:
             "skipped_too_short": skipped_short,
             "skipped_role": skipped_role,
             "skipped_tool_result": skipped_tool_result,
+            "skipped_runtime_error": skipped_runtime_error,
         }
 
     def extract(self, params: dict[str, Any]) -> dict[str, Any]:

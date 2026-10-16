@@ -26,6 +26,16 @@
 - **宿主容量复现**：SQLite 69 个真实 MemoryRuntime 在 soft NOFILE=1024 下，4/8 worker 访问及 30 次重建维持 348 fd，全部关闭回到 3。PG 在服务端 100 连接、进程 1024 fd 限制下，69 个真实 MemoryRuntime 创建/全部 checkpoint 预热分别仅占 1/2 条会话，8 worker 混合访问峰值 12；30 次重建不增长，关闭一个实例后其它实例仍可用，全部关闭会话归零且 fd 回到 3。
 - **接续**：CI/release 已配置专用 PG，显式测试 DSN 不可用时失败。无数据迁移；慢 SQL/长事务会占用池，饱和明确报错。预算按进程与连接配置计数，宿主控制面另计。发布后 Octop 需更新 memory 依赖才能消费修复。PROJECT_MAP、DECISIONS、TEST_MATRIX、KNOWN_RISKS 与中英文 README 已同步。
 
+### 系统运行报错的记忆隔离
+
+- **状态**：实现与验证完成。
+- **问题与场景**：模型重试耗尽后产生的 `Model call failed after ...` 被当成普通助手消息采集、提炼为 Atom，并再次召回。
+- **范围与验收**：按结构化来源及已知旧版运行时消息格式隔离系统报错；用户输入、手工保存、用户批准及明确要求记住的内容保持有效。阻止错误原始证据再次提炼或兜底召回；对可确认来源的存量 Atom 软停用并保留审计。SQLite / PostgreSQL 使用相同规则，不修改 schema 或原始证据。
+- **方案与关键文件**：domain retention policy；capture / extractor / episode / promotion / recall 共用判定；operations 提供先预览后应用的存量治理。octop-harness 与 Octop 的重试配置均采用 `on_failure="error"`；不传自定义 `retry_on`，重试范围、次数与退避参数沿用原设置，由上游判断错误类型。checkpoint 保存 task error，WebUI / IM / 团队单独展示失败。团队自动失败通知排除采集；来源标记继续保护自定义宿主及旧版合成回复。
+- **验证**：新增用例先复现失败，再通过来源过滤、raw fallback、Candidate/Episode 提炼、晋升及隐私脱敏前判定用例；真实专用 PostgreSQL 与 SQLite 共用 22 条治理断言，验证预览/应用、人工保护、幂等和事务回滚。同步当前 develop 后，`TEST_POSTGRES_DSN='dbname=octop_memory_retention_test' make all RUN='.venv/bin/python -m'` 通过 format/lint/strict mypy，1454 passed / 4 skipped；PG cases 实际执行，skip 属于可选环境。用例与操作均不删除原始证据。
+- **宿主后续验证**：真实 LangGraph 失败后 checkpoint 有 task error、没有错误助手消息及 raw/Atom 写入；修复模拟凭据后可恢复执行并正常采集。团队 SDK 异常及主 Agent 汇总异常均结束为 failed 并释放锁，自动通知不采集。octop-harness 提交门禁为 1787 passed / 28 skipped（配套 PR#76）；SDK 401/403 等按原预算重试，实际组装的 `retry_on` 与上游默认对象一致。Octop 在当前 develop 上的重点联调为 200 passed / 1 skipped，覆盖实际重试配置、WebSocket 认证失败与恢复、IM 错误事件、团队错误帧和历史标记；前端强记忆和错误状态测试 7 passed。宿主完整门禁与构建结果记录在配套 Octop PR。本仓文档/架构检查 41 passed。
+- **接续**：PROJECT_MAP / DECISIONS / TEST_MATRIX / KNOWN_RISKS / README_AUDIT 和中英文 README 已同步；存量操作默认预览，显式 apply 才软停用。仍发送合成报错的新宿主必须提供来源标记，证据缺失或混合来源记录保守保留，边界见 ADR-041 和 KNOWN_RISKS。
+
 ### Octop 命名收尾
 
 - **状态**：命名清理完成；真实 PostgreSQL、Hermes checkout 和 dashboard 可选环境未验。

@@ -13,6 +13,7 @@
 | 召回策略 | 默认 atom/raw；entity anchor 加 page_headline、index 加 vector；raw fallback 与 session 排除；`router.py`、`multi_source.py`、recall 入口 |
 | backend | SQLite/PostgreSQL 是关系 backend；PG 共享 8+4 连接预算、30 秒等待及 64 请求队列，注明进程/配置边界；Chroma/Qdrant 是 index，不宣称 PG skip 等于通过 |
 | capture / page | 不承诺每条消息都捕获，dirty 不等于已再生成；`application/runtime.py`、`pipeline/page/` |
+| 运行报错 | octop-harness / Octop 主路径抛出异常，团队自动失败通知排除采集；capture/extractor/promotion/raw recall 按来源排除自定义/旧版合成报错；维护操作默认预览，apply 只软停用可确认的自动报错，保护用户意图和排障经验；`domain/retention.py`、`operations/retention.py` |
 | 宿主接入 | OpenClaw/Hermes 共享一份指南；真实 host hook、安装环境与纯 Python 单测分开验证 |
 | 数据维护 | 不将去重、retention、vacuum 混为一谈；明确备份、offline 声明与旧 reader 兼容性 |
 | 发布内容 | sdist allowlist、wheel 与独立插件分别验证；不将源码 dashboard 宣称为 wheel 功能 |

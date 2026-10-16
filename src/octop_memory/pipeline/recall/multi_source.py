@@ -18,6 +18,7 @@ import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from octop_memory.domain.retention import is_runtime_error
 from octop_memory.pipeline.recall.parser import ParsedQuery
 from octop_memory.pipeline.recall.rerank import (
     RerankCandidate,
@@ -326,6 +327,8 @@ def _per_token_raw_search(
             _log.warning("recall raw search failed for token %r: %s", token, exc, exc_info=True)
             continue
         for evt_idx, event in enumerate(events):
+            if is_runtime_error(event):
+                continue
             if event.id not in seen:
                 seen[event.id] = (token_idx, evt_idx, event)
     ranked = sorted(seen.values(), key=lambda kv: (kv[0], kv[1]))
