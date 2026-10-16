@@ -126,40 +126,91 @@ class TestManualDocumentGovernanceParity:
 class TestRuntimeErrorRetentionParity:
     FAILURE = "Model call failed after 3 attempts with AuthenticationError: 401 token_expired"
 
-    def test_capture_and_legacy_raw_recall(self, backend: Any) -> None:
-        from octop_memory import Memory, MemoryService
+    @pytest.mark.parametrize("origin", ["unmarked", "missing", "mixed"])
+    def test_unknown_origin_is_review_only_and_never_retired(self, backend: Any, origin: str) -> None:
+        from octop_memory import Memory
+        from octop_memory.operations.retention import audit_runtime_errors
+
+        memory = Memory(namespace="retention", backend=backend)
+        marker = {"octop_runtime_error": True} if origin == "mixed" else {}
+        backend.save_raw(_make_raw(event_type="assistant_message", payload=marker, content=self.FAILURE))
+        refs = ["raw-1"]
+        if origin == "missing":
+            refs.append("missing-source")
+        elif origin == "mixed":
+            backend.save_raw(_make_raw(id="user-context", content="检查一下这个请求"))
+            refs.append("user-context")
+        backend.save_entity(_make_entity(atom_count=1))
+        backend.save_candidate(_make_candidate(status="promoted", raw_event_ids=refs))
+        memory.add_atom(_make_atom(raw_event_ids=refs))
+        backend.save_candidate(_make_candidate(id="pending", raw_event_ids=refs))
+        for apply in (False, True):
+            report = audit_runtime_errors(memory, apply=apply)
+            assert report.atom_ids == [] and report.candidate_ids == []
+            assert report.review_atom_ids == ["atom-1"]
+            assert report.review_candidate_ids == ["pending"]
+            assert memory.get_atom("atom-1").deprecated_at is None
+            assert memory.get_candidate("pending").status == "pending"
+            assert not memory.list_journal(action="deprecate")
+
+    def test_capture_and_marked_raw_recall(self, backend: Any) -> None:
+        from octop_memory import Memory
+        from octop_memory.application.runtime import MemoryRuntime
         from octop_memory.pipeline.recall import recall_for_prompt
 
         memory = Memory(namespace="retention", backend=backend)
-        service = MemoryService(memory, config={"capture": {"min_message_chars": 0}})
-        result = service.capture_turn(user="记住：401 故障要验证修复成功。", assistant=self.FAILURE)
+        runtime = MemoryRuntime(memory, config={"capture": {"min_message_chars": 0}})
+        result = runtime.capture(
+            {
+                "events": [
+                    {"event_type": "user_message", "content": "401 故障要验证修复成功。"},
+                    {
+                        "event_type": "assistant_message",
+                        "content": self.FAILURE,
+                        "payload": {"octop_runtime_error": True},
+                    },
+                ]
+            }
+        )
         assert result["accepted"] == 1
         assert result["skipped_runtime_error"] == 1
-        backend.save_raw(_make_raw(event_type="assistant_message", content=self.FAILURE, payload={"role": "assistant"}))
+        backend.save_raw(
+            _make_raw(
+                event_type="assistant_message",
+                content=self.FAILURE,
+                payload={"role": "assistant", "octop_runtime_error": True},
+            )
+        )
         assert not recall_for_prompt(memory, "token_expired", raw_policy="always").snippets
         assert memory.get_raw("raw-1") is not None
 
-    @pytest.mark.parametrize("protection", ["none", "explicit", "manual", "approved", "lesson", "edited", "missing"])
+    @pytest.mark.parametrize("protection", ["none", "user_source", "manual", "approved", "lesson", "edited", "missing"])
     def test_audit_preview_soft_retirement_and_protections(self, backend: Any, protection: str) -> None:
         from octop_memory import Memory
         from octop_memory.operations.retention import audit_runtime_errors
         from octop_memory.pipeline.recall import recall_for_prompt
 
         memory = Memory(namespace="retention", backend=backend)
-        backend.save_raw(_make_raw(event_type="assistant_message", content=self.FAILURE, payload={"role": "assistant"}))
+        backend.save_raw(
+            _make_raw(
+                event_type="assistant_message",
+                content=self.FAILURE,
+                payload={"role": "assistant", "octop_runtime_error": True},
+            )
+        )
         refs = ["raw-1"]
         quote_id = "raw-1"
         overrides: dict[str, Any] = {}
         assertion = "Authentication token expired (401, token_expired)"
-        if protection == "explicit":
-            backend.save_raw(_make_raw(id="request", content="请记住：此次认证故障是历史事件。"))
+        if protection == "user_source":
+            backend.save_raw(_make_raw(id="request", content="这次认证故障是历史事件。"))
             refs.append("request")
         elif protection == "manual":
             overrides["extractor_version"] = "manual/v1"
         elif protection == "approved":
             overrides["decided_by"] = "user"
         elif protection == "lesson":
-            assertion = "Verified fix: refresh credentials and confirm a successful request."
+            assertion = "Refresh credentials and confirm a successful request."
             backend.save_raw(_make_raw(id="lesson", event_type="assistant_message", payload={}, content=assertion))
             refs.append("lesson")
             quote_id = "lesson"
@@ -211,7 +262,13 @@ class TestRuntimeErrorRetentionParity:
         from octop_memory.operations.retention import audit_runtime_errors
 
         memory = Memory(namespace="retention", backend=backend)
-        backend.save_raw(_make_raw(event_type="assistant_message", content=self.FAILURE, payload={"role": "assistant"}))
+        backend.save_raw(
+            _make_raw(
+                event_type="assistant_message",
+                content=self.FAILURE,
+                payload={"role": "assistant", "octop_runtime_error": True},
+            )
+        )
         backend.save_candidate(_make_candidate())
         manual = memory.store("记住：401 排障后需要验证请求成功。")
         report = audit_runtime_errors(memory, apply=True)
@@ -223,7 +280,13 @@ class TestRuntimeErrorRetentionParity:
         from octop_memory import Memory
 
         memory = Memory(namespace="retention", backend=backend)
-        backend.save_raw(_make_raw(event_type="assistant_message", content=self.FAILURE, payload={"role": "assistant"}))
+        backend.save_raw(
+            _make_raw(
+                event_type="assistant_message",
+                content=self.FAILURE,
+                payload={"role": "assistant", "octop_runtime_error": True},
+            )
+        )
         backend.save_candidate(_make_candidate())
         assert memory.promote_candidates().dropped == 1
         assert not memory.list_atoms()
@@ -233,7 +296,13 @@ class TestRuntimeErrorRetentionParity:
         from octop_memory.operations.retention import audit_runtime_errors
 
         memory = Memory(namespace="retention", backend=backend)
-        backend.save_raw(_make_raw(event_type="assistant_message", content=self.FAILURE, payload={"role": "assistant"}))
+        backend.save_raw(
+            _make_raw(
+                event_type="assistant_message",
+                content=self.FAILURE,
+                payload={"role": "assistant", "octop_runtime_error": True},
+            )
+        )
         backend.save_entity(_make_entity(atom_count=1))
         backend.save_candidate(_make_candidate(status="promoted"))
         memory.add_atom(_make_atom())

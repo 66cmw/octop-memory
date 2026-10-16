@@ -1,13 +1,14 @@
 """Govern retained facts against runtime provenance and user-owned documents.
 
-No raw evidence is modified or removed. Capture/extraction/recall share the
-retention classifier, so the preserved diagnostics cannot re-enter via fallback.
+No raw evidence is modified or removed. Marked diagnostics remain excluded
+online; ambiguous legacy evidence is preserved and listed for human review.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -17,18 +18,21 @@ from typing import TYPE_CHECKING, Any
 from octop_memory.domain.retention import (
     MANUAL_DOCUMENTS_META_KEY,
     MANUAL_DOCUMENTS_RECALL_KEY,
+    is_runtime_error,
     is_runtime_error_candidate,
     manual_documents_revision,
     normalize_manual_fact,
 )
 from octop_memory.ports.llm import LLMClient
-from octop_memory.types import Candidate, JournalEntry
+from octop_memory.types import Candidate, JournalEntry, RawEvent
 
 if TYPE_CHECKING:
     from octop_memory.core import Memory
 
 _SCAN_LIMIT = 2_147_483_647
 _REASON = "Runtime error retention audit: synthetic failure, no durable user-confirmed knowledge."
+# Legacy text can nominate evidence for human review, never exclude it online.
+_LEGACY_RETRY_FAILURE = re.compile(r"\AModel call failed after [1-9]\d* attempts? with [\w.]+:\s", re.ASCII)
 
 
 _MANUAL_COMPARE_SYSTEM = """Compare ordinary memory facts with authoritative user-edited documents.
@@ -307,14 +311,36 @@ class RuntimeErrorAudit:
     candidate_ids: list[str] = field(default_factory=list)
     atoms_deprecated: int = 0
     candidates_rejected: int = 0
+    review_atom_ids: list[str] = field(default_factory=list)
+    review_candidate_ids: list[str] = field(default_factory=list)
+
+
+def _runtime_error_needs_review(candidate: Candidate, get_raw: Callable[[str], RawEvent | None]) -> bool:
+    """Missing/mixed or legacy provenance is a review hint, never a value verdict."""
+    if candidate.decided_by == "user" or candidate.extractor_version.startswith("manual/"):
+        return False
+    events = [get_raw(key) for key in set([*candidate.raw_event_ids, candidate.quote_event_id]) if key]
+    if any(event is not None and event.event_type in {"manual", "host_memory_write"} for event in events):
+        return False
+    return (
+        not events
+        or any(event is None for event in events)
+        or any(
+            event is not None
+            and event.event_type == "assistant_message"
+            and event.payload.get("role") != "user"
+            and (is_runtime_error(event) or _LEGACY_RETRY_FAILURE.match(event.content))
+            for event in events
+        )
+    )
 
 
 def audit_runtime_errors(memory: Memory, *, apply: bool = False) -> RuntimeErrorAudit:
     """Default to preview; ``apply`` soft-deprecates only proven automatic errors.
 
-    Approved/manual/user-edited/explicitly requested and ambiguous mixed-source
-    memories are protected. Re-running is idempotent. Uses existing backend
-    contracts and one transaction, identically on SQLite and PostgreSQL.
+    Approved/manual/user-edited memories are protected by provenance. Unknown
+    records are listed in review_*_ids without changing their status, even with
+    apply=True. Re-running is idempotent; both backends use one transaction.
     """
     report = RuntimeErrorAudit()
     with memory.backend.transaction():
@@ -325,11 +351,17 @@ def audit_runtime_errors(memory: Memory, *, apply: bool = False) -> RuntimeError
             if atom.id in edited_ids:
                 continue
             candidate = memory.get_candidate(atom.candidate_id)
-            if candidate is None or not is_runtime_error_candidate(candidate, memory.get_raw):
+            if candidate is None:
+                report.review_atom_ids.append(atom.id)
+                continue
+            if not is_runtime_error_candidate(candidate, memory.get_raw):
+                if _runtime_error_needs_review(candidate, memory.get_raw):
+                    report.review_atom_ids.append(atom.id)
                 continue
             # A mismatch is evidence of editing/import drift; never infer from
             # the old candidate that the current assertion is still an error.
             if atom.assertion != candidate.assertion or atom.quote_event_id != candidate.quote_event_id:
+                report.review_atom_ids.append(atom.id)
                 continue
             report.atom_ids.append(atom.id)
             if apply and memory.deprecate_atom(atom.id, actor="rule", note=_REASON):
@@ -341,6 +373,8 @@ def audit_runtime_errors(memory: Memory, *, apply: bool = False) -> RuntimeError
             if candidate.status not in {"pending", "needs_review", "conflict"}:
                 continue
             if not is_runtime_error_candidate(candidate, memory.get_raw):
+                if _runtime_error_needs_review(candidate, memory.get_raw):
+                    report.review_candidate_ids.append(candidate.id)
                 continue
             report.candidate_ids.append(candidate.id)
             if apply:

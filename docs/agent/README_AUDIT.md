@@ -13,7 +13,7 @@
 | 召回策略 | 默认 atom/raw；entity anchor 加 page_headline、index 加 vector；raw fallback 与 session 排除；`router.py`、`multi_source.py`、recall 入口 |
 | backend | SQLite/PostgreSQL 是关系 backend；PG 共享 8+4 连接预算、30 秒等待及 64 请求队列，注明进程/配置边界；Chroma/Qdrant 是 index，不宣称 PG skip 等于通过 |
 | capture / page | 不承诺每条消息都捕获，dirty 不等于已再生成；`application/runtime.py`、`pipeline/page/` |
-| 运行报错 | octop-harness / Octop 主路径抛出异常，团队自动失败通知排除采集；capture/extractor/promotion/raw recall 按来源排除自定义/旧版合成报错；维护操作默认预览，apply 只软停用可确认的自动报错，保护用户意图和排障经验；`domain/retention.py`、`operations/retention.py` |
+| 运行报错 | 在线仅按结构化错误标记排除，主动记忆由 Agent 调用 memory_save；无记忆意图/排障价值关键词。维护操作仅停用全部证据均有标记的自动记录；旧版格式仅列审核清单，缺失/混合来源不改状态，人工保护来自记录；`domain/retention.py`、`operations/retention.py` |
 | 宿主接入 | OpenClaw/Hermes 共享一份指南；真实 host hook、安装环境与纯 Python 单测分开验证 |
 | 数据维护 | 不将去重、retention、vacuum 混为一谈；明确备份、offline 声明与旧 reader 兼容性 |
 | 手动文档 | 手动 USER.md/MEMORY.md 优先；显式核对/写入后 provider 检查，原文证据与置信校验、事务软停用和替代候选；重复仅按实际 session 快照抑制，完整文档不入 Atom/索引；限量/失败状态可见；`service.py`、`operations/retention.py`、`pipeline/recall/` |

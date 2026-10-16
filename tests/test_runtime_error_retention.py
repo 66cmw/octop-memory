@@ -20,7 +20,7 @@ from octop_memory.types import RawEvent
 FAILURE = "Model call failed after 3 attempts with AuthenticationError: Error code: 401 - token_expired"
 
 
-def failure_event() -> RawEvent:
+def failure_event(*, marked: bool = False) -> RawEvent:
     return RawEvent(
         id="failure",
         host="octop-harness",
@@ -30,6 +30,7 @@ def failure_event() -> RawEvent:
         timestamp=datetime.now(UTC),
         event_type="assistant_message",
         content=FAILURE,
+        payload={"octop_runtime_error": True} if marked else {},
     )
 
 
@@ -43,21 +44,28 @@ def memory(tmp_path: Path) -> Iterator[Memory]:
 
 
 def test_capture_preserves_user_request_and_drops_generated_failure(memory: Memory) -> None:
-    service = MemoryService(memory, config={"capture": {"min_message_chars": 0}})
-    result = service.capture_turn(user="记住：401 故障修复后要验证成功请求。", assistant=FAILURE)
+    runtime = MemoryRuntime(memory, config={"capture": {"min_message_chars": 0}})
+    result = runtime.capture(
+        {
+            "events": [
+                {"event_type": "user_message", "content": "401 故障修复后要验证成功请求。"},
+                {"event_type": "assistant_message", "content": FAILURE, "payload": {"octop_runtime_error": True}},
+            ]
+        }
+    )
     assert result["accepted"] == 1
     assert [event.event_type for event in memory.list_raw()] == ["user_message"]
 
 
 @pytest.mark.parametrize("extractor_type", [CandidateExtractor, EpisodeExtractor])
-def test_old_runtime_failure_never_reaches_either_extraction_prompt(extractor_type: type) -> None:
+def test_marked_runtime_failure_never_reaches_either_extraction_prompt(extractor_type: type) -> None:
     llm = MockLLMClient(default_response='{"candidates": [], "episodes": []}')
-    extractor_type(llm=llm).extract([failure_event()])
+    extractor_type(llm=llm).extract([failure_event(marked=True)])
     assert not llm.calls
 
 
-def test_old_raw_failure_cannot_return_via_fallback(memory: Memory) -> None:
-    memory.add_raw_batch([failure_event()])
+def test_marked_raw_failure_cannot_return_via_fallback(memory: Memory) -> None:
+    memory.add_raw_batch([failure_event(marked=True)])
     assert not recall_for_prompt(memory, "token_expired", raw_policy="always").snippets
     assert not recall_multi_source(memory, "token_expired", sources=("raw",)).snippets
     assert memory.get_raw("failure") is not None  # Evidence is still inspectable.
@@ -100,8 +108,41 @@ def test_capture_checks_source_before_privacy_redaction(memory: Memory, store_co
         "payload": {"octop_runtime_error": True} if marked else {},
     }
     result = runtime.capture({"events": [event]})
-    assert result["accepted"] == 0
-    assert result["skipped_runtime_error"] == 1
+    assert result["accepted"] == (0 if marked else 1)
+    assert result["skipped_runtime_error"] == (1 if marked else 0)
     # The same text quoted by a user remains an eligible statement.
     event["event_type"] = "user_message"
     assert runtime.capture({"events": [event]})["accepted"] == 1
+
+
+@pytest.mark.parametrize("content", ["请记住这件事", "remember this", "保留这个偏好", "garder cette préférence"])
+def test_explicit_save_needs_no_keyword_or_capture_length_exception(memory: Memory, content: str) -> None:
+    service = MemoryService(memory, config={"capture": {"min_message_chars": 200}})
+    capture = service.capture_turn(user=content)
+    assert capture["accepted"] == 0 and capture["skipped_too_short"] == 1
+    saved = service.save(content)
+    assert saved.content == content and memory.get_atom(saved.atom_id) is not None
+
+
+@pytest.mark.parametrize("suffix", ["", "\n已验证、已解决", "\nTry refreshing credentials, then confirm success."])
+def test_unmarked_legacy_text_is_retained_without_value_keyword_checks(memory: Memory, suffix: str) -> None:
+    content = FAILURE + suffix
+    service = MemoryService(memory, config={"capture": {"min_message_chars": 0}})
+    assert service.capture_turn(assistant=content)["accepted"] == 1
+    assert recall_for_prompt(memory, "token_expired", raw_policy="always").snippets
+
+
+@pytest.mark.parametrize("extractor_type", [CandidateExtractor, EpisodeExtractor])
+def test_unknown_legacy_source_is_left_to_the_extraction_model(extractor_type: type) -> None:
+    llm = MockLLMClient(default_response='{"candidates": [], "episodes": []}')
+    extractor_type(llm=llm).extract([failure_event()])
+    assert llm.calls
+
+
+@pytest.mark.parametrize("content", [FAILURE, FAILURE + "\n已验证修复", "A structured runtime diagnostic"])
+def test_marked_diagnostics_are_excluded_regardless_of_value_words(memory: Memory, content: str) -> None:
+    runtime = MemoryRuntime(memory, config={"capture": {"min_message_chars": 0}})
+    result = runtime.capture(
+        {"events": [{"event_type": "assistant_message", "content": content, "payload": {"octop_runtime_error": True}}]}
+    )
+    assert result["accepted"] == 0 and result["skipped_runtime_error"] == 1

@@ -61,7 +61,7 @@ OpenClaw 在 prompt build 前调用可选 `recallPrefetcher`，把结果交给�
 
 ## ADR-012：capture 兼容短 CJK 消息并剥离 think（Accepted）
 
-共享 capture policy 使用 CJK 加权长度和显式记忆意图，在判长与入库前剥离 `<think>`。
+共享 capture policy 使用 CJK 加权长度，在判长与入库前剥离 `<think>`；不再按显式记忆意图关键词给短消息放行，主动保存由 Agent 调用 memory_save。
 避免各宿主重复实现过滤与推理文本回灌；代价是边界消息可能被过滤，修改阈值时验证多语言样本。
 
 ## ADR-021：分层目录与共享 MemoryRuntime（Accepted）
@@ -198,7 +198,7 @@ LangGraph 按类型要求 ConnectionPool；内部租约适配器继承该类型�
 
 ## ADR-041：按来源隔离运行诊断，保护用户知识（Accepted）
 
-运行失败的发生事实不等于可长期使用的知识。octop-harness / Octop 使用 `on_failure="error"` 让模型失败保留为 checkpoint 异常，由宿主单独展示；团队自动失败通知排除采集。仍合成错误回复的宿主需标记来源，memory 在 capture、两类 extractor、promotion 和 raw prompt recall 复用 domain retention policy；兼容已知旧版重试失败信封，不用通用错误词黑名单。提炼 v2.4 先判断长期价值，再评分，保留已验证排障经验与用户明确保留的历史事件。存量治理默认预览，显式 apply 通过现有事务和 deprecate/reject 接口软停用来源明确的自动记录，保留 raw 与决策审计；人工批准/编辑/保存及证据含糊的记录不自动停用，不自动改写用户数据或引入新 schema。
+运行失败的发生事实不等于可长期使用的知识。octop-harness / Octop 使用 `on_failure="error"` 让模型失败保留为 checkpoint 异常，由宿主单独展示；团队自动失败通知排除采集。仍合成错误回复的宿主必须标记 `payload.octop_runtime_error=true`，memory 在 capture、两类 extractor、promotion 和 raw prompt recall 仅按结构化来源排除。移除“记住”与“已验证”等意图/价值词表；主动保存由 Agent 自行调用 memory_save，手动写入、人工批准/编辑按来源保护。提炼模型判断普通对话的长期价值。⚠️ 召回/写入路径变更：后台采集不再给意图短句特例；存量治理即使 apply 也只软停用全部证据均带错误标记的自动记录。旧版严格重试失败格式仅在 operations 审核清单中使用，缺失或混合来源保留原状态、返回 review_*_ids；不据文字推断来源，不删 raw 或新增 schema。
 
 ## ADR-042：手动文档为准，冲突转候选，去重绑定会话快照（Accepted）
 

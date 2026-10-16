@@ -28,7 +28,7 @@ from octop_memory.application.path_projection import (
     render_raw_md,
     slice_lines,
 )
-from octop_memory.domain.retention import EXPLICIT_MEMORY_INTENT_RE, is_runtime_error
+from octop_memory.domain.retention import is_runtime_error
 from octop_memory.pipeline.episode import EpisodeExtractor
 from octop_memory.pipeline.extractor import CandidateExtractor
 from octop_memory.pipeline.page.regenerator import regenerate_dirty
@@ -424,9 +424,7 @@ class MemoryRuntime:
             ):
                 skipped_marker += 1
                 continue
-            if _effective_content_chars(content.strip()) < int(
-                capture_cfg["min_message_chars"]
-            ) and not _has_explicit_memory_intent(content):
+            if _effective_content_chars(content.strip()) < int(capture_cfg["min_message_chars"]):
                 skipped_short += 1
                 continue
 
@@ -937,10 +935,6 @@ def _event_role(event_type: str, payload: dict[str, Any]) -> str:
     if event_type.startswith("tool"):
         return "tool"
     return "user"
-
-
-def _has_explicit_memory_intent(content: str) -> bool:
-    return EXPLICIT_MEMORY_INTENT_RE.search(content) is not None
 
 
 # CJK Unified Ideographs (same narrow range as pipeline/recall/budget.py).

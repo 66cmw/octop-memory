@@ -18,7 +18,7 @@
 
 ### 手动档案与普通记忆协同（PR #20 / harness #76 / Octop #2103）
 
-- **状态 / 场景**：实现与本仓完整验证完成，配套宿主收尾中。用户明确要求 USER.md 与 MEMORY.md 只由用户修改；冲突时手动文档优先，通知用户并降级到 Candidate 更新 octop-memory。
+- **状态 / 场景**：三个仓库实现、验证和配套宿主提交已完成。用户明确要求 USER.md 与 MEMORY.md 只由用户修改；冲突时手动文档优先，通知用户并降级到 Candidate 更新 octop-memory。
 - **范围与验收**：复用既有 retention/runtime/promotion/recall 模块，无新 source 模块或 schema；原文引用校验，软停用冲突旧 Atom，替代事实候选保留两侧证据；重复 Atom 仅按实际聊天快照抑制召回；无模型/不确定不强制停用。低层 Memory.store 仍是原始存储 API；宿主通过 Service provider 或显式核对启用治理。
 - **方案**：见 ADR-042 / PROJECT_MAP。完整文档只保存对账元数据，不全文导入/索引；小型召回清单参与 cache key，阻止旧 raw/dirty headline 回流。候选采纳校验对账版本，Octop 同时提交当前文件，拦截保存后尚未核对的版本变化。单次 100 条未核对 Atom 可续查。
 - **验证**：`TEST_POSTGRES_DSN='dbname=octop_memory_retention_test' make all RUN='.venv/bin/python -m'` format/lint/strict mypy 通过，1483 passed / 4 skipped；真实 PG 均运行。专用 PG 与 SQLite 手动文档同组用例 8 passed；新增单测覆盖模型缺失/伪造/不确定、事务回滚、旧版本采纳、save/自动晋升、分批续查和 recall cache 隔离。四项 skip 为已有可选环境，非 PG。
@@ -34,15 +34,13 @@
 - **宿主容量复现**：SQLite 69 个真实 MemoryRuntime 在 soft NOFILE=1024 下，4/8 worker 访问及 30 次重建维持 348 fd，全部关闭回到 3。PG 在服务端 100 连接、进程 1024 fd 限制下，69 个真实 MemoryRuntime 创建/全部 checkpoint 预热分别仅占 1/2 条会话，8 worker 混合访问峰值 12；30 次重建不增长，关闭一个实例后其它实例仍可用，全部关闭会话归零且 fd 回到 3。
 - **接续**：CI/release 已配置专用 PG，显式测试 DSN 不可用时失败。无数据迁移；慢 SQL/长事务会占用池，饱和明确报错。预算按进程与连接配置计数，宿主控制面另计。发布后 Octop 需更新 memory 依赖才能消费修复。PROJECT_MAP、DECISIONS、TEST_MATRIX、KNOWN_RISKS 与中英文 README 已同步。
 
-### 系统运行报错的记忆隔离
+### 系统运行报错的记忆隔离（PR #20）
 
-- **状态**：实现与验证完成。
-- **问题与场景**：模型重试耗尽后产生的 `Model call failed after ...` 被当成普通助手消息采集、提炼为 Atom，并再次召回。
-- **范围与验收**：按结构化来源及已知旧版运行时消息格式隔离系统报错；用户输入、手工保存、用户批准及明确要求记住的内容保持有效。阻止错误原始证据再次提炼或兜底召回；对可确认来源的存量 Atom 软停用并保留审计。SQLite / PostgreSQL 使用相同规则，不修改 schema 或原始证据。
-- **方案与关键文件**：domain retention policy；capture / extractor / episode / promotion / recall 共用判定；operations 提供先预览后应用的存量治理。octop-harness 与 Octop 的重试配置均采用 `on_failure="error"`；不传自定义 `retry_on`，重试范围、次数与退避参数沿用原设置，由上游判断错误类型。checkpoint 保存 task error，WebUI / IM / 团队单独展示失败。团队自动失败通知排除采集；来源标记继续保护自定义宿主及旧版合成回复。
-- **验证**：新增用例先复现失败，再通过来源过滤、raw fallback、Candidate/Episode 提炼、晋升及隐私脱敏前判定用例；真实专用 PostgreSQL 与 SQLite 共用 22 条治理断言，验证预览/应用、人工保护、幂等和事务回滚。同步当前 develop 后，`TEST_POSTGRES_DSN='dbname=octop_memory_retention_test' make all RUN='.venv/bin/python -m'` 通过 format/lint/strict mypy，1454 passed / 4 skipped；PG cases 实际执行，skip 属于可选环境。用例与操作均不删除原始证据。
-- **宿主后续验证**：真实 LangGraph 失败后 checkpoint 有 task error、没有错误助手消息及 raw/Atom 写入；修复模拟凭据后可恢复执行并正常采集。团队 SDK 异常及主 Agent 汇总异常均结束为 failed 并释放锁，自动通知不采集。octop-harness 提交门禁为 1787 passed / 28 skipped（配套 PR#76）；SDK 401/403 等按原预算重试，实际组装的 `retry_on` 与上游默认对象一致。Octop 在当前 develop 上的重点联调为 200 passed / 1 skipped，覆盖实际重试配置、WebSocket 认证失败与恢复、IM 错误事件、团队错误帧和历史标记；前端强记忆和错误状态测试 7 passed。宿主完整门禁与构建结果记录在配套 Octop PR。本仓文档/架构检查 41 passed。
-- **接续**：PROJECT_MAP / DECISIONS / TEST_MATRIX / KNOWN_RISKS / README_AUDIT 和中英文 README 已同步；存量操作默认预览，显式 apply 才软停用。仍发送合成报错的新宿主必须提供来源标记，证据缺失或混合来源记录保守保留，边界见 ADR-041 和 KNOWN_RISKS。
+- **状态 / 用户决策**：最小实现与完整验证完成。主动记忆由 Agent 自行调用 memory_save；删除记忆意图和排障价值关键词，在线报错仅按结构化来源排除，存量来源不明保留待人工审核。
+- **范围与验收**：只改 `domain/retention.py`、`application/runtime.py`、`operations/retention.py` 三个既有源码模块。移除短消息意图例外，不改变长度阈值；memory_save 的手工保存不受后台采集长度限制。capture / 两类 extractor / promotion / raw recall 复用仅结构化来源规则。没有新模块、schema、前端或 retry 策略变更。
+- **治理边界**：自动停用须全部引用证据均为结构化错误；人工保存/批准/编辑由来源保护。旧版严格报错信封仅在存量 operations 生成审核提示；缺失/混合来源返回 `review_atom_ids` / `review_candidate_ids`，即使 apply 也不改变这些记录的状态，不自动新增 UI 待办。不删除原始证据。见 ADR-012/041、KNOWN_RISKS。
+- **验证**：先用新增用例复现旧行为（6 failed / 3 passed），修改后定向 154 passed / 1 optional skip；SQLite/真实专用 PostgreSQL 同组治理 28 passed（PG 未 skip），覆盖未知来源保留、结构化停用、无意图词保存、原证据、幂等与事务回滚。配套 harness 记忆工具/中间件/重试检查 60 passed。`TEST_POSTGRES_DSN='dbname=octop_memory_retention_test' make all RUN='.venv/bin/python -m'` format/lint/strict mypy 通过，1504 passed / 4 optional skips，真实 PG 全部执行；文档/架构检查 41 passed。
+- **接续**：现有工作区文档和手动记忆协同保持原行为；PROJECT_MAP / DECISIONS / TEST_MATRIX / KNOWN_RISKS / README_AUDIT 与中英文 README 已同步。不会自动回滚已有人工决策或运行生产数据治理。
 
 ### Octop 命名收尾
 
